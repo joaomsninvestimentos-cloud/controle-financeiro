@@ -1,0 +1,12 @@
+.git
+.gitignore
+.next
+.open-next
+.pnpm-store
+.wrangler
+coverage
+dist
+node_modules
+playwright-report
+test-results
+*.tsbuildinfo
