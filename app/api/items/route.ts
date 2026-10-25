@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/db'
 import { items, contas, contaMembers, users } from '@/db/schemas/schema'
-import { eq, desc, and, inArray } from 'drizzle-orm'
+import { eq, desc, and, inArray, or } from 'drizzle-orm'
 import { getAuthContext } from '@/lib/auth'
 import { z } from 'zod'
 
@@ -25,12 +25,6 @@ async function getContasAcessiveis(userId: string): Promise<string[]> {
     .from(contaMembers)
     .where(and(eq(contaMembers.userId, userId), eq(contaMembers.status, 'active')))
   return [...proprias.map(c => c.id), ...membros.map(m => m.contaId)]
-}
-
-// Contas onde o usuário é dono
-async function getContasProprias(userId: string): Promise<string[]> {
-  const proprias = await db.select({ id: contas.id }).from(contas).where(eq(contas.userId, userId))
-  return proprias.map(c => c.id)
 }
 
 // Enriches items with author name/email
@@ -79,7 +73,12 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ items: await enrichItems(rows) })
   }
 
-  const conditions = [eq(items.userId, ctx.user.id)]
+  const acessiveis = await getContasAcessiveis(ctx.user.id)
+  const visibilidade = acessiveis.length > 0
+    ? or(eq(items.userId, ctx.user.id), inArray(items.contaId, acessiveis))
+    : eq(items.userId, ctx.user.id)
+
+  const conditions = [visibilidade]
   if (mes && !todos) conditions.push(eq(items.mes, mes))
 
   const rows = await db

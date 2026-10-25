@@ -7,6 +7,7 @@ import {
   Sparkles, BarChart2, List, ChevronDown, LogOut, User, Loader2,
   Pencil, Check, X, ChevronLeft, ChevronRight, Building2, Plus,
   Users, AlertTriangle, Target, RefreshCw, Download, Moon, Sun, FileText, Bell,
+  Search, DownloadCloud,
 } from 'lucide-react'
 import GraficosView from './GraficosView'
 import ContasModal from './ContasModal'
@@ -197,7 +198,17 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
   const [showContas, setShowContas] = useState(false)
   const [modoLote, setModoLote] = useState(false)
   const [lote, setLote] = useState<Array<{descricao:string;valor:string;tipo:Tipo;categoria:string;data:string;contaId:string;recorrente:boolean}>>([])
+  const [busca, setBusca] = useState('')
+  const [erro, setErro] = useState('')
+  const [installPrompt, setInstallPrompt] = useState<{ prompt: () => Promise<void> } | null>(null)
   const swRef = useRef(false)
+  const erroTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const mostrarErro = useCallback((msg: string) => {
+    setErro(msg)
+    if (erroTimer.current) clearTimeout(erroTimer.current)
+    erroTimer.current = setTimeout(() => setErro(''), 4000)
+  }, [])
 
   // PWA
   useEffect(() => {
@@ -205,7 +216,17 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
       swRef.current = true
       navigator.serviceWorker.register('/sw.js').catch(() => {})
     }
+    const onInstall = (e: Event) => {
+      e.preventDefault()
+      setInstallPrompt(e as unknown as { prompt: () => Promise<void> })
+    }
+    window.addEventListener('beforeinstallprompt', onInstall)
+    return () => window.removeEventListener('beforeinstallprompt', onInstall)
   }, [])
+
+  useEffect(() => {
+    if (contaSelecionada !== 'todas') setItemContaId(contaSelecionada)
+  }, [contaSelecionada])
 
   // Carregar contas
   const carregarContas = useCallback(() => {
@@ -278,7 +299,10 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
   // ── Adicionar item único ──────────────────────────────────────────────────
   const adicionarItem = useCallback(async () => {
     const valor = parsearValor(valorTexto)
-    if (!descricao.trim() || valor <= 0) return
+    if (!descricao.trim() || valor <= 0) {
+      mostrarErro('Preencha a descrição e um valor maior que zero.')
+      return
+    }
     setSaving(true)
     const mesItem = data.slice(0, 7)
     try {
@@ -293,14 +317,20 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
       })
       if (res.ok) {
         const { item } = await res.json()
-        setItems(prev => [item, ...prev])
+        if (item.mes === mesSelecionado && (contaSelecionada === 'todas' || item.contaId === contaSelecionada)) {
+          setItems(prev => [item, ...prev])
+        }
         setTodosItems(prev => [item, ...prev])
         setDescricao('')
         setValorTexto('')
         setRecorrente(false)
+      } else {
+        mostrarErro('Não foi possível salvar. Tente novamente.')
       }
+    } catch {
+      mostrarErro('Sem conexão. Verifique sua internet.')
     } finally { setSaving(false) }
-  }, [descricao, valorTexto, tipo, categoria, data, itemContaId, recorrente])
+  }, [descricao, valorTexto, tipo, categoria, data, itemContaId, recorrente, mesSelecionado, contaSelecionada, mostrarErro])
 
   // ── Adicionar lote ────────────────────────────────────────────────────────
   const adicionarLoteAoCarrinho = () => {
@@ -326,13 +356,17 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
       })
       if (res.ok) {
         const { items: novos } = await res.json()
-        setItems(prev => [...novos, ...prev])
+        setItems(prev => [...novos.filter((i: Item) => i.mes === mesSelecionado), ...prev])
         setTodosItems(prev => [...novos, ...prev])
         setLote([])
         setModoLote(false)
+      } else {
+        mostrarErro('Não foi possível salvar o lote. Tente novamente.')
       }
+    } catch {
+      mostrarErro('Sem conexão. Verifique sua internet.')
     } finally { setSaving(false) }
-  }, [lote])
+  }, [lote, mesSelecionado, mostrarErro])
 
   // ── Repetir recorrentes do mês anterior ──────────────────────────────────
   const repetirRecorrentes = useCallback(async () => {
@@ -381,7 +415,7 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
     // Notificação imediata de teste + agendar verificação diária via localStorage
     new Notification('Meu Controle Financeiro 💰', {
       body: 'Notificações ativadas! Você receberá alertas de orçamento.',
-      icon: '/icons/icon-192.png',
+      icon: '/icon-192.png',
     })
     localStorage.setItem('notificacoes', '1')
     // Verificar orçamentos agora
@@ -399,12 +433,12 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
       if (pct >= 100) {
         new Notification(`⚠️ Orçamento excedido: ${o.categoria}`, {
           body: `Você gastou ${gasto.toLocaleString('pt-BR',{style:'currency',currency:'BRL'})} de ${fmt(limite)} (${pct}%)`,
-          icon: '/icons/icon-192.png',
+          icon: '/icon-192.png',
         })
       } else if (pct >= 80) {
         new Notification(`⚡ Atenção: ${o.categoria}`, {
           body: `Você já usou ${pct}% do orçamento de ${o.categoria} este mês.`,
-          icon: '/icons/icon-192.png',
+          icon: '/icon-192.png',
         })
       }
     })
@@ -447,17 +481,27 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
     })
     if (res.ok) {
       const { item } = await res.json()
-      setItems(prev => prev.map(i => i.id === id ? item : i))
-      setTodosItems(prev => prev.map(i => i.id === id ? item : i))
+      setItems(prev => prev.map(i => i.id === id ? { ...i, ...item } : i))
+      setTodosItems(prev => prev.map(i => i.id === id ? { ...i, ...item } : i))
+    } else {
+      mostrarErro('Não foi possível salvar a edição.')
     }
-  }, [])
+  }, [mostrarErro])
 
   // ── Remover ──────────────────────────────────────────────────────────────
   const removerItem = useCallback(async (id: string) => {
+    if (!confirm('Excluir este lançamento?')) return
+    const snapshot = items
+    const snapshotTodos = todosItems
     setItems(prev => prev.filter(i => i.id !== id))
     setTodosItems(prev => prev.filter(i => i.id !== id))
-    await fetch(`/api/items/${id}`, { method: 'DELETE' })
-  }, [])
+    const res = await fetch(`/api/items/${id}`, { method: 'DELETE' })
+    if (!res.ok) {
+      setItems(snapshot)
+      setTodosItems(snapshotTodos)
+      mostrarErro('Não foi possível excluir.')
+    }
+  }, [items, todosItems, mostrarErro])
 
   // ── Logout ───────────────────────────────────────────────────────────────
   const logout = async () => {
@@ -467,6 +511,20 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
   }
 
   const categorias = tipo === 'despesa' ? CATEGORIAS_DESPESA : CATEGORIAS_RECEITA
+  const q = busca.trim().toLowerCase()
+  const itemsFiltrados = q
+    ? items.filter(i =>
+        i.descricao.toLowerCase().includes(q) ||
+        i.categoria.toLowerCase().includes(q) ||
+        (contas.find(c => c.id === i.contaId)?.nome ?? '').toLowerCase().includes(q)
+      )
+    : items
+
+  const instalarApp = async () => {
+    if (!installPrompt) return
+    await installPrompt.prompt()
+    setInstallPrompt(null)
+  }
 
   return (
     <div className="min-h-screen bg-[#FAF6F1] dark:bg-[#2B2825] font-nunito pb-10 transition-colors duration-300">
@@ -495,6 +553,15 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
           >
             {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
           </button>
+          {installPrompt && (
+            <button
+              onClick={instalarApp}
+              className="p-2 rounded-full hover:bg-[#8FB39A]/10 text-[#8C857C] hover:text-[#8FB39A] transition-colors"
+              title="Instalar no celular"
+            >
+              <DownloadCloud size={16} />
+            </button>
+          )}
           <button onClick={logout} className="p-2 rounded-full hover:bg-[#D4A0A0]/10 text-[#8C857C] hover:text-[#D4A0A0] transition-colors" title="Sair">
             <LogOut size={16} />
           </button>
@@ -502,6 +569,11 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
       </header>
 
       <div className="max-w-2xl mx-auto px-4 pt-5 space-y-4 text-[#2D2A26] dark:text-[#E8E0D5]">
+        {erro && (
+          <div className="bg-[#D4A0A0]/20 border border-[#D4A0A0]/40 rounded-2xl px-4 py-3 text-sm text-[#2D2A26] dark:text-[#E8E0D5] font-semibold">
+            {erro}
+          </div>
+        )}
 
         {/* Seletor de mês */}
         <div className="bg-white dark:bg-[#342F2B] rounded-2xl shadow-snug flex items-center justify-between px-4 py-3">
@@ -785,16 +857,29 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
           </div>
         ) : aba === 'lancamentos' ? (
           <div className="space-y-3">
-            {items.filter(i=>i.tipo==='receita').length>0&&(
+            <div className="relative">
+              <Search size={14} className="absolute left-4 top-1/2 -translate-y-1/2 text-[#8C857C]" />
+              <input
+                type="search"
+                value={busca}
+                onChange={e=>setBusca(e.target.value)}
+                placeholder="Buscar lançamento, categoria ou conta…"
+                className="w-full rounded-2xl border border-[rgba(45,42,38,0.12)] dark:border-[rgba(255,255,255,0.07)] bg-white dark:bg-[#342F2B] pl-10 pr-4 py-3 text-sm text-[#2D2A26] dark:text-[#E8E0D5] placeholder-[#8C857C] outline-none focus:ring-2 focus:ring-[#8FB39A]/50 shadow-snug"
+              />
+            </div>
+            {q && itemsFiltrados.length === 0 && (
+              <p className="text-center text-sm text-[#8C857C] py-6">Nenhum lançamento para “{busca}”.</p>
+            )}
+            {itemsFiltrados.filter(i=>i.tipo==='receita').length>0&&(
               <Section titulo="💰 Receitas">
-                {items.filter(i=>i.tipo==='receita').map(i=>(
+                {itemsFiltrados.filter(i=>i.tipo==='receita').map(i=>(
                   <ItemCard key={i.id} item={i} contas={contas} currentUser={user} contaSelecionada={contaSelecionada} onRemover={removerItem} onEditar={editarItem}/>
                 ))}
               </Section>
             )}
-            {items.filter(i=>i.tipo==='despesa').length>0&&(
+            {itemsFiltrados.filter(i=>i.tipo==='despesa').length>0&&(
               <Section titulo="💸 Despesas">
-                {items.filter(i=>i.tipo==='despesa').map(i=>(
+                {itemsFiltrados.filter(i=>i.tipo==='despesa').map(i=>(
                   <ItemCard key={i.id} item={i} contas={contas} currentUser={user} contaSelecionada={contaSelecionada} onRemover={removerItem} onEditar={editarItem}/>
                 ))}
               </Section>
@@ -907,7 +992,7 @@ function ItemCard({ item, contas, currentUser, contaSelecionada, onRemover, onEd
   const categorias = item.tipo==='despesa' ? CATEGORIAS_DESPESA : CATEGORIAS_RECEITA
 
   // Usuário pode editar se: é o próprio autor OU é dono da conta selecionada
-  const isOwnerDaConta = contaSelecionada !== 'todas' && conta?.isOwner === true
+  const isOwnerDaConta = conta?.isOwner === true
   const isAutor = item.userId === currentUser.id
   const podeEditar = isAutor || isOwnerDaConta
 
