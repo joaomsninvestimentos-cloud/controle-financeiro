@@ -10,7 +10,7 @@
     "dev": "next dev -p 13000",
     "build": "next build",
     "start": "next start -p 13000",
-    "test": "node --import tsx --test lib/request.test.ts",
+    "test": "node --import tsx --test lib/request.test.ts lib/llm.test.ts lib/finbot-fallback.test.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
