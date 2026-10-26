@@ -5,6 +5,8 @@ import { melhorias } from '@/db/schemas/schema'
 import { ensureMelhoriasTable } from '@/lib/ensure-melhorias'
 import { FINBOT_DIRETRIZES, buildUserFinanceBlock } from '@/lib/finbot-prompt'
 import { loadFinanceSnapshot, fmtBrl, parsearValor, mesLabel } from '@/lib/chat-context'
+import { getLlmConfig, getLlmStatus } from '@/lib/llm'
+import { buildOfflineReply } from '@/lib/finbot-fallback'
 import { z } from 'zod'
 
 const bodySchema = z.object({
@@ -24,20 +26,17 @@ const ideasSchema = z.object({
   })).max(5).optional(),
 })
 
-function llmConfig() {
-  const base = (process.env.USER_LLM_BASE_URL ?? process.env.BTY_LLM_SERVER_BASE_URL ?? '').replace(/\/$/, '')
-  const key = process.env.USER_LLM_API_KEY ?? process.env.BTY_LLM_SERVER_API_KEY ?? ''
-  const model = process.env.USER_LLM_MODEL ?? 'claude-sonnet-4.6'
-  return { base, key, model }
-}
-
 async function callLlm(system: string, messages: Array<{ role: 'user' | 'assistant'; content: string }>) {
-  const { base, key, model } = llmConfig()
-  if (!base || !key) {
+  const config = getLlmConfig()
+  if (!config) {
+    const status = getLlmStatus()
+    console.error('LLM não configurada. Faltando:', status.missing.join(' | '))
     return { ok: false as const, status: 503, error: 'LLM_NOT_CONFIGURED' }
   }
 
-  const response = await fetch(`${base}/messages`, {
+  const { baseUrl, apiKey: key, model } = config
+
+  const response = await fetch(`${baseUrl}/messages`, {
     method: 'POST',
     headers: {
       'x-api-key': key,
@@ -57,12 +56,17 @@ async function callLlm(system: string, messages: Array<{ role: 'user' | 'assista
 
   if (!response.ok) {
     const err = await response.text()
-    console.error('LLM error:', err.slice(0, 400))
-    return { ok: false as const, status: 502, error: 'LLM_ERROR' }
+    console.error(`LLM error (${response.status}) em ${baseUrl}:`, err.slice(0, 400))
+    const isAuth = response.status === 401 || response.status === 403
+    return { ok: false as const, status: 502, error: isAuth ? 'LLM_AUTH_FAILED' : 'LLM_ERROR' }
   }
 
   const data = await response.json() as { content?: Array<{ type: string; text: string }> }
-  const text = data.content?.find(c => c.type === 'text')?.text ?? ''
+  const text = data.content?.find(c => c.type === 'text')?.text?.trim() ?? ''
+  if (!text) {
+    console.error('LLM respondeu vazio em', baseUrl)
+    return { ok: false as const, status: 502, error: 'LLM_EMPTY' }
+  }
   return { ok: true as const, text }
 }
 
@@ -77,6 +81,16 @@ function extractJsonBlock(text: string): { reply: string; ideas: z.infer<typeof 
   } catch {
     return { reply, ideas: undefined }
   }
+}
+
+/**
+ * Diagnóstico da configuração do FinBot (sem expor chaves).
+ * GET /api/chat responde { configured, baseUrl, model, missing }.
+ */
+export async function GET() {
+  const ctx = await getAuthContext()
+  if (!ctx.authorized) return NextResponse.json({ error: 'UNAUTHORIZED' }, { status: 401 })
+  return NextResponse.json(getLlmStatus())
 }
 
 export async function POST(req: NextRequest) {
@@ -148,7 +162,32 @@ ${pediuMelhoria ? '\nO usuário pediu ideias/melhorias nesta mensagem: extraia p
 
   const llm = await callLlm(system, messages)
   if (!llm.ok) {
-    return NextResponse.json({ error: llm.error }, { status: llm.status })
+    // Nunca deixa o chat sem resposta: devolve o resumo calculado localmente
+    // e mantém o detalhe técnico (sem chaves) para quem administra o app.
+    const topCategoria = Object.entries(snap.totalMes.porCategoria)
+      .sort((a, b) => b[1] - a[1])[0]
+
+    const orcamentosExcedidos = snap.orcsUsuario
+      .map(o => {
+        const gasto = snap.totalMes.porCategoria[o.categoria] ?? 0
+        const limite = parsearValor(o.limite)
+        return { categoria: o.categoria, gasto, limite }
+      })
+      .filter(o => o.limite > 0 && o.gasto > o.limite)
+
+    const reply = buildOfflineReply({
+      mesLabel: mesLabel(mes),
+      receitas: snap.totalMes.receitas,
+      despesas: snap.totalMes.despesas,
+      saldo: snap.totalMes.saldo,
+      nLancamentos: snap.itensMes.length,
+      topCategoria: topCategoria ? { nome: topCategoria[0], valor: topCategoria[1] } : undefined,
+      orcamentosExcedidos,
+      motivo: llm.error as 'LLM_NOT_CONFIGURED' | 'LLM_AUTH_FAILED' | 'LLM_ERROR' | 'LLM_EMPTY',
+      faltando: llm.error === 'LLM_NOT_CONFIGURED' ? getLlmStatus().missing : undefined,
+    })
+
+    return NextResponse.json({ reply, offline: true, error: llm.error })
   }
 
   const { reply, ideas } = extractJsonBlock(llm.text)

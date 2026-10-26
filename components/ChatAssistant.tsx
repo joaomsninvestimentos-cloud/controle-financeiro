@@ -90,16 +90,21 @@ export default function ChatAssistant({ mesSelecionado }: Props) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ messages: historico, mes: mesSelecionado }),
       })
-      const data = await res.json() as { reply?: string; error?: string; ideasSaved?: number }
+      const data = await res.json() as { reply?: string; error?: string; ideasSaved?: number; offline?: boolean }
 
       let reply = data.reply
       if (!res.ok) {
-        if (data.error === 'LLM_NOT_CONFIGURED') {
-          reply = 'A IA ainda não está configurada neste ambiente. Peça ao desenvolvedor para definir USER_LLM_BASE_URL e USER_LLM_API_KEY.'
-        } else if (data.error === 'UNAUTHORIZED') {
+        if (data.error === 'UNAUTHORIZED') {
           reply = 'Sua sessão expirou. Saia e entre de novo.'
+        } else if (data.error === 'LLM_NOT_CONFIGURED') {
+          reply = 'Estou em modo offline: a análise por IA não está configurada neste ambiente.\n\n'
+            + '_Detalhe técnico: defina USER_LLM_BASE_URL e USER_LLM_API_KEY (ou REACTUS_BASE_URL + BTY_LLM_SERVER_API_KEY)._'
+        } else if (data.error === 'LLM_AUTH_FAILED') {
+          reply = 'Estou em modo offline: o provedor recusou a chave da IA.\n\n'
+            + '_Detalhe técnico: o provedor respondeu 401/403 — confira a chave configurada._'
         } else {
-          reply = 'Não consegui responder agora. Tente de novo em instantes.'
+          reply = 'Não consegui responder agora. Tente de novo em instantes.\n\n'
+            + '_Detalhe técnico: falha ao chamar o provedor de IA (veja os logs do servidor)._'
         }
       }
 
@@ -133,6 +138,10 @@ export default function ChatAssistant({ mesSelecionado }: Props) {
   function renderMd(text: string) {
     const lines = text.split('\n')
     return lines.map((line, i) => {
+      // Linha inteira em _itálico_ = nota técnica/discreta.
+      if (line.length > 2 && line.startsWith('_') && line.endsWith('_')) {
+        return <p key={i} className="text-[10px] leading-relaxed text-[#8C857C]">{line.slice(1, -1)}</p>
+      }
       const parts = line.split(/\*\*(.*?)\*\*/g)
       const rendered = parts.map((p, j) => j % 2 === 1 ? <strong key={j}>{p}</strong> : p)
       if (line.startsWith('- ') || line.startsWith('• ')) {

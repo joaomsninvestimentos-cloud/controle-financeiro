@@ -48,6 +48,27 @@ A general-purpose Next.js web application template with database initialization 
    - `pnpm db:migrate` — run migrations
    - `pnpm db:studio` — open Drizzle Studio
 
+## FinBot (chat com IA)
+
+O `POST /api/chat` fala com um provedor compatível com a API da Anthropic
+(`${BASE_URL}/messages`). A configuração é resolvida automaticamente:
+
+| item | ordem de fallback |
+| --- | --- |
+| base URL | `USER_LLM_BASE_URL` → `BTY_LLM_SERVER_BASE_URL` → `REACTUS_BASE_URL` + `/v1` |
+| chave | `USER_LLM_API_KEY` → `BTY_LLM_SERVER_API_KEY` → `HAPPYSEEDS_KEY` |
+| modelo | `USER_LLM_MODEL` → `claude-sonnet-4.6` |
+
+Ou seja: em ambientes que já expõem `REACTUS_BASE_URL` + `BTY_LLM_SERVER_API_KEY`
+nada precisa ser preenchido. Para diagnosticar, use:
+
+- `GET /api/health` → `data.finbot.configured` (público, sem segredos)
+- `GET /api/chat` → `{ configured, baseUrl, model, missing }` (requer sessão)
+
+Se o provedor estiver fora ou mal configurado, o FinBot não quebra: responde em
+**modo offline** com o resumo do mês calculado no servidor e o detalhe técnico
+discreto no fim da mensagem.
+
 ## Project Structure
 
 - `app/` — Next.js App Router (`layout.tsx`, `page.tsx`, `api/`).

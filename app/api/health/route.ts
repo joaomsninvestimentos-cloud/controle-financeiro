@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { getLlmStatus } from '@/lib/llm'
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -7,10 +8,15 @@ const corsHeaders = {
 }
 
 export async function GET() {
+  const llm = getLlmStatus()
   return NextResponse.json(
     {
       success: true,
-      data: { message: 'ok' },
+      data: {
+        message: 'ok',
+        // Diagnóstico do FinBot sem expor chaves nem hosts.
+        finbot: { configured: llm.configured, model: llm.model },
+      },
     },
     {
       status: 200,
