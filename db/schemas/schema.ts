@@ -81,3 +81,17 @@ export const items = pgTable('items', {
   recorrente: boolean('recorrente').notNull().default(false),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 })
+
+export const melhorias = pgTable('melhorias', {
+  id: text('id').primaryKey(),
+  userId: text('user_id')
+    .notNull()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  userName: text('user_name').notNull(),
+  titulo: text('titulo').notNull(),
+  descricao: text('descricao').notNull(),
+  justificativa: text('justificativa').notNull(),
+  impacto: text('impacto').notNull().default('medio'),
+  status: text('status').notNull().default('nova'),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+})

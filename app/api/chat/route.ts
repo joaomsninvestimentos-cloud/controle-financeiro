@@ -1,162 +1,182 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { db } from '@/db'
-import { items, contas, orcamentos } from '@/db/schemas/schema'
-import { eq, and, desc } from 'drizzle-orm'
 import { getAuthContext } from '@/lib/auth'
+import { db } from '@/db'
+import { melhorias } from '@/db/schemas/schema'
+import { ensureMelhoriasTable } from '@/lib/ensure-melhorias'
+import { FINBOT_DIRETRIZES, buildUserFinanceBlock } from '@/lib/finbot-prompt'
+import { loadFinanceSnapshot, fmtBrl, parsearValor, mesLabel } from '@/lib/chat-context'
+import { z } from 'zod'
 
-const BTY_LLM_BASE = process.env.BTY_LLM_SERVER_BASE_URL!
-const BTY_LLM_KEY = process.env.BTY_LLM_SERVER_API_KEY!
+const bodySchema = z.object({
+  messages: z.array(z.object({
+    role: z.enum(['user', 'assistant']),
+    content: z.string().min(1).max(4000),
+  })).min(1).max(24),
+  mes: z.string().regex(/^\d{4}-\d{2}$/),
+})
 
-function fmt(v: number) {
-  return v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL', minimumFractionDigits: 2 })
+const ideasSchema = z.object({
+  ideas: z.array(z.object({
+    titulo: z.string().min(4).max(80),
+    descricao: z.string().min(8).max(400),
+    justificativa: z.string().min(8).max(400),
+    impacto: z.enum(['alto', 'medio', 'baixo']),
+  })).max(5).optional(),
+})
+
+function llmConfig() {
+  const base = (process.env.USER_LLM_BASE_URL ?? process.env.BTY_LLM_SERVER_BASE_URL ?? '').replace(/\/$/, '')
+  const key = process.env.USER_LLM_API_KEY ?? process.env.BTY_LLM_SERVER_API_KEY ?? ''
+  const model = process.env.USER_LLM_MODEL ?? 'claude-sonnet-4.6'
+  return { base, key, model }
 }
 
-function parsear(t: string) {
-  if (!t) return 0
-  if (t.includes(',')) return parseFloat(t.replace(/\./g, '').replace(',', '.')) || 0
-  return parseFloat(t) || 0
-}
-
-function mesLabel(ym: string) {
-  const meses = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho',
-    'Julho','Agosto','Setembro','Outubro','Novembro','Dezembro']
-  const [y, m] = ym.split('-')
-  return `${meses[parseInt(m,10)-1]} ${y}`
-}
-
-export async function POST(req: NextRequest) {
-  const ctx = await getAuthContext()
-  if (!ctx.authorized) return NextResponse.json({ error: 'UNAUTHORIZED' }, { status: 401 })
-
-  const { messages, mes } = await req.json() as {
-    messages: Array<{ role: 'user' | 'assistant'; content: string }>
-    mes: string // YYYY-MM atual selecionado no app
+async function callLlm(system: string, messages: Array<{ role: 'user' | 'assistant'; content: string }>) {
+  const { base, key, model } = llmConfig()
+  if (!base || !key) {
+    return { ok: false as const, status: 503, error: 'LLM_NOT_CONFIGURED' }
   }
 
-  if (!messages?.length) return NextResponse.json({ error: 'INVALID_INPUT' }, { status: 400 })
-
-  // ── Montar contexto financeiro do usuário ──────────────────────────────────
-  const mesMesAnterior = (() => {
-    const [y, m] = mes.split('-').map(Number)
-    const d = new Date(y, m - 2, 1)
-    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`
-  })()
-
-  // Items dos últimos 2 meses
-  const [itensMes, itensMesAnt, contasUsuario, orcsUsuario] = await Promise.all([
-    db.select().from(items).where(and(eq(items.userId, ctx.user.id), eq(items.mes, mes))).orderBy(desc(items.data)),
-    db.select().from(items).where(and(eq(items.userId, ctx.user.id), eq(items.mes, mesMesAnterior))).orderBy(desc(items.data)),
-    db.select().from(contas).where(eq(contas.userId, ctx.user.id)),
-    db.select().from(orcamentos).where(and(eq(orcamentos.userId, ctx.user.id), eq(orcamentos.mes, mes))),
-  ])
-
-  // Calcular totais
-  const calc = (its: typeof itensMes) => {
-    const receitas = its.filter(i => i.tipo === 'receita').reduce((a, i) => a + parsear(i.valor), 0)
-    const despesas = its.filter(i => i.tipo === 'despesa').reduce((a, i) => a + parsear(i.valor), 0)
-    const porCategoria: Record<string, number> = {}
-    for (const i of its.filter(i => i.tipo === 'despesa')) {
-      porCategoria[i.categoria] = (porCategoria[i.categoria] ?? 0) + parsear(i.valor)
-    }
-    return { receitas, despesas, saldo: receitas - despesas, porCategoria }
-  }
-
-  const totalMes = calc(itensMes)
-  const totalAnt = calc(itensMesAnt)
-
-  // Top categorias de despesa
-  const topCats = Object.entries(totalMes.porCategoria)
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, 5)
-    .map(([cat, val]) => `  - ${cat}: ${fmt(val)}`)
-    .join('\n')
-
-  // Orçamentos e status
-  const orcsStatus = orcsUsuario.map(o => {
-    const gasto = totalMes.porCategoria[o.categoria] ?? 0
-    const limite = parsear(o.limite)
-    const pct = Math.round(gasto / limite * 100)
-    return `  - ${o.categoria}: gasto ${fmt(gasto)} de ${fmt(limite)} (${pct}%)${gasto > limite ? ' ⚠️ EXCEDEU' : ''}`
-  }).join('\n')
-
-  // Lançamentos recentes do mês (últimos 10)
-  const recentes = itensMes.slice(0, 10).map(i =>
-    `  - ${i.data}: ${i.tipo === 'receita' ? '+' : '-'}${fmt(parsear(i.valor))} — ${i.descricao} (${i.categoria})`
-  ).join('\n')
-
-  const systemPrompt = `Você é o assistente financeiro pessoal do app "Meu Controle Financeiro". Seu nome é **FinBot** 🤖.
-
-Você ajuda o usuário a entender seus dados financeiros, dá dicas personalizadas e responde perguntas sobre o app.
-Seja sempre amigável, direto e use emojis com moderação. Responda sempre em português brasileiro.
-
-━━━ DADOS FINANCEIROS ATUAIS DO USUÁRIO ━━━
-
-👤 Usuário: ${ctx.user.name}
-📅 Mês em análise: ${mesLabel(mes)}
-
-📊 RESUMO DE ${mesLabel(mes).toUpperCase()}:
-  Receitas:  ${fmt(totalMes.receitas)}
-  Despesas:  ${fmt(totalMes.despesas)}
-  Saldo:     ${fmt(totalMes.saldo)}
-  Nº de lançamentos: ${itensMes.length}
-
-📊 RESUMO DE ${mesLabel(mesMesAnterior).toUpperCase()} (comparativo):
-  Receitas:  ${fmt(totalAnt.receitas)}
-  Despesas:  ${fmt(totalAnt.despesas)}
-  Saldo:     ${fmt(totalAnt.saldo)}
-
-💸 TOP DESPESAS POR CATEGORIA EM ${mesLabel(mes)}:
-${topCats || '  (sem despesas registradas)'}
-
-${orcsStatus ? `🎯 ORÇAMENTOS DO MÊS:\n${orcsStatus}` : ''}
-
-🏦 CONTAS CADASTRADAS: ${contasUsuario.length > 0 ? contasUsuario.map(c => c.nome).join(', ') : 'nenhuma'}
-
-📋 ÚLTIMOS 10 LANÇAMENTOS:
-${recentes || '  (nenhum lançamento ainda)'}
-
-━━━ FUNCIONALIDADES DO APP ━━━
-- Lançamentos por mês separados (cada mês é independente)
-- Contas bancárias com saldo arrastado mês a mês
-- Contas compartilhadas (convite por e-mail, auditoria de quem lançou)
-- Lançamentos em lote
-- Orçamentos por categoria com barra de progresso
-- Alerta quando despesas passam 80% das receitas
-- Repetição automática de lançamentos recorrentes
-- Exportação para CSV/Excel
-- Gráficos (barras por mês, pizza por categoria, evolução do saldo)
-- PWA instalável no celular
-
-Quando sugerir melhorias para o app, seja criativo e pense no que seria mais útil para controle financeiro pessoal e empresarial.
-Quando falar de valores, use sempre o formato brasileiro (R$ 1.234,56).`
-
-  // Chamar Claude via Anthropic protocol
-  const response = await fetch(`${BTY_LLM_BASE}/messages`, {
+  const response = await fetch(`${base}/messages`, {
     method: 'POST',
     headers: {
-      'x-api-key': BTY_LLM_KEY,
+      'x-api-key': key,
       'anthropic-version': '2023-06-01',
       'x-bty-business': 'ReActUs',
       'x-bty-workspace': 'default',
       'Content-Type': 'application/json',
     },
     body: JSON.stringify({
-      model: 'claude-sonnet-4.6',
-      max_tokens: 1024,
+      model,
+      max_tokens: 900,
       stream: false,
-      system: systemPrompt,
-      messages: messages.map(m => ({ role: m.role, content: m.content })),
+      system,
+      messages,
     }),
   })
 
   if (!response.ok) {
     const err = await response.text()
-    console.error('LLM error:', err)
-    return NextResponse.json({ error: 'LLM_ERROR' }, { status: 500 })
+    console.error('LLM error:', err.slice(0, 400))
+    return { ok: false as const, status: 502, error: 'LLM_ERROR' }
   }
 
-  const data = await response.json() as { content: Array<{ type: string; text: string }> }
-  const text = data.content?.find(c => c.type === 'text')?.text ?? 'Desculpe, não consegui responder agora.'
+  const data = await response.json() as { content?: Array<{ type: string; text: string }> }
+  const text = data.content?.find(c => c.type === 'text')?.text ?? ''
+  return { ok: true as const, text }
+}
 
-  return NextResponse.json({ reply: text })
+function extractJsonBlock(text: string): { reply: string; ideas: z.infer<typeof ideasSchema>['ideas'] } {
+  const match = text.match(/```json\s*([\s\S]*?)```/i)
+  if (!match) return { reply: text.trim(), ideas: undefined }
+  const reply = text.replace(match[0], '').trim()
+  try {
+    const parsed = ideasSchema.safeParse(JSON.parse(match[1]))
+    if (!parsed.success) return { reply, ideas: undefined }
+    return { reply, ideas: parsed.data.ideas }
+  } catch {
+    return { reply, ideas: undefined }
+  }
+}
+
+export async function POST(req: NextRequest) {
+  const ctx = await getAuthContext()
+  if (!ctx.authorized) return NextResponse.json({ error: 'UNAUTHORIZED' }, { status: 401 })
+
+  const raw = await req.json().catch(() => null)
+  const parsed = bodySchema.safeParse(raw)
+  if (!parsed.success) return NextResponse.json({ error: 'INVALID_INPUT' }, { status: 400 })
+
+  const { messages, mes } = parsed.data
+  const snap = await loadFinanceSnapshot(ctx.user.id, mes)
+
+  const topCats = Object.entries(snap.totalMes.porCategoria)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 6)
+    .map(([cat, val]) => `- ${cat}: ${fmtBrl(val)}`)
+    .join('\n') || '- (sem despesas registradas)'
+
+  const orcsStatus = snap.orcsUsuario.length
+    ? snap.orcsUsuario.map(o => {
+        const gasto = snap.totalMes.porCategoria[o.categoria] ?? 0
+        const limite = parsearValor(o.limite)
+        const pct = limite > 0 ? Math.round(gasto / limite * 100) : 0
+        return `- ${o.categoria}: ${fmtBrl(gasto)} de ${fmtBrl(limite)} (${pct}%)${gasto > limite ? ' EXCEDEU' : ''}`
+      }).join('\n')
+    : '- (nenhum orçamento neste mês)'
+
+  const recentes = snap.itensMes.slice(0, 12).map(i =>
+    `- ${i.data}: ${i.tipo === 'receita' ? '+' : '-'}${fmtBrl(parsearValor(i.valor))} — ${i.descricao} (${i.categoria})`
+  ).join('\n') || '- (nenhum lançamento ainda)'
+
+  const dados = buildUserFinanceBlock({
+    nome: ctx.user.name,
+    mesLabel: mesLabel(mes),
+    mesAntLabel: mesLabel(snap.mesAnt),
+    receitas: fmtBrl(snap.totalMes.receitas),
+    despesas: fmtBrl(snap.totalMes.despesas),
+    saldo: fmtBrl(snap.totalMes.saldo),
+    nLancamentos: snap.itensMes.length,
+    receitasAnt: fmtBrl(snap.totalAnt.receitas),
+    despesasAnt: fmtBrl(snap.totalAnt.despesas),
+    saldoAnt: fmtBrl(snap.totalAnt.saldo),
+    topCats,
+    orcsStatus,
+    contas: snap.contasUsuario.length ? snap.contasUsuario.map(c => c.nome).join(', ') : 'nenhuma',
+    recentes,
+    recorrentes: snap.recorrentes,
+  })
+
+  const lastUser = messages.filter(m => m.role === 'user').at(-1)?.content ?? ''
+  const pediuMelhoria = /melhor(ia|ias)|sugira|sugestão|sugestao|ideia|ideias|desenvolvedor|guarde|anote|falta no app|poderia ter/i.test(lastUser)
+
+  const system = `${FINBOT_DIRETRIZES}
+
+${dados}
+
+FORMATO DE SAÍDA:
+- Responda ao usuário em texto normal (markdown simples: **negrito**, listas com - ).
+- Se o usuário pediu melhorias, ideias de produto, ou você identificar 1–3 gaps claros nos dados dele, acrescente NO FINAL um bloco:
+
+\`\`\`json
+{"ideas":[{"titulo":"...","descricao":"...","justificativa":"...","impacto":"alto|medio|baixo"}]}
+\`\`\`
+
+- O bloco json é interno: descreva as ideias também em português no texto, de forma curta.
+- Se não houver ideia nova e relevante, NÃO inclua o bloco json.
+${pediuMelhoria ? '\nO usuário pediu ideias/melhorias nesta mensagem: extraia pelo menos 1 ideia concreta se fizer sentido.' : ''}`
+
+  const llm = await callLlm(system, messages)
+  if (!llm.ok) {
+    return NextResponse.json({ error: llm.error }, { status: llm.status })
+  }
+
+  const { reply, ideas } = extractJsonBlock(llm.text)
+  let saved = 0
+
+  if (ideas && ideas.length > 0) {
+    try {
+      await ensureMelhoriasTable()
+      const rows = ideas.map(idea => ({
+        id: crypto.randomUUID(),
+        userId: ctx.user.id,
+        userName: ctx.user.name,
+        titulo: idea.titulo,
+        descricao: idea.descricao,
+        justificativa: idea.justificativa,
+        impacto: idea.impacto,
+        status: 'nova',
+      }))
+      await db.insert(melhorias).values(rows)
+      saved = rows.length
+    } catch (err) {
+      console.error('melhorias insert failed', err)
+    }
+  }
+
+  const finalReply = saved > 0
+    ? `${reply}\n\n_${saved} ideia(s) enviada(s) para o desenvolvedor._`
+    : reply || 'Não consegui montar uma resposta agora. Tente de novo.'
+
+  return NextResponse.json({ reply: finalReply, ideasSaved: saved })
 }
