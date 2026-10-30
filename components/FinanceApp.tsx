@@ -733,12 +733,12 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
                 </select>
                 <ChevronDown size={13} className="absolute right-3 top-1/2 -translate-y-1/2 text-[#8C857C] pointer-events-none" />
               </div>
-              <label className="flex items-center gap-2 rounded-2xl border border-[rgba(45,42,38,0.12)] dark:border-[rgba(255,255,255,0.07)] bg-[#FAF6F1] dark:bg-[#3E3935] px-4 py-3 cursor-pointer">
-                <input type="checkbox" checked={recorrente} onChange={e=>setRecorrente(e.target.checked)} className="w-4 h-4 accent-[#8FB39A]" />
-                <span className="text-sm text-[#2D2A26] dark:text-[#E8E0D5]">🔄 Recorrente</span>
-              </label>
             </div>
           )}
+          <label className="flex items-center gap-2 rounded-2xl border border-[rgba(45,42,38,0.12)] dark:border-[rgba(255,255,255,0.07)] bg-[#FAF6F1] dark:bg-[#3E3935] px-4 py-3 cursor-pointer mb-3">
+            <input type="checkbox" checked={recorrente} onChange={e=>setRecorrente(e.target.checked)} className="w-4 h-4 accent-[#8FB39A]" />
+            <span className="text-sm text-[#2D2A26] dark:text-[#E8E0D5]">🔄 Recorrente (copiar manualmente para o mês seguinte)</span>
+          </label>
 
           <div className="flex gap-3">
             <div className="relative flex-1">
@@ -987,6 +987,7 @@ function ItemCard({ item, contas, currentUser, contaSelecionada, onRemover, onEd
   const [novaCat, setNovaCat] = useState(item.categoria)
   const [novaData, setNovaData] = useState(item.data)
   const [novaContaId, setNovaContaId] = useState(item.contaId??'')
+  const [novaRecorrencia, setNovaRecorrencia] = useState(item.recorrente)
   const [salvando, setSalvando] = useState(false)
 
   const categorias = item.tipo==='despesa' ? CATEGORIAS_DESPESA : CATEGORIAS_RECEITA
@@ -1005,7 +1006,7 @@ function ItemCard({ item, contas, currentUser, contaSelecionada, onRemover, onEd
     const valor = parsearValor(novoValor)
     if (!novaDesc.trim() || valor <= 0) return
     setSalvando(true)
-    await onEditar(item.id, { descricao: novaDesc.trim(), valor: valor.toFixed(2), categoria: novaCat, data: novaData, contaId: novaContaId||null })
+    await onEditar(item.id, { descricao: novaDesc.trim(), valor: valor.toFixed(2), categoria: novaCat, data: novaData, contaId: novaContaId||null, recorrente: novaRecorrencia })
     setSalvando(false)
     setEditando(false)
   }
@@ -1016,6 +1017,7 @@ function ItemCard({ item, contas, currentUser, contaSelecionada, onRemover, onEd
     setNovaCat(item.categoria)
     setNovaData(item.data)
     setNovaContaId(item.contaId??'')
+    setNovaRecorrencia(item.recorrente)
     setEditando(false)
   }
 
@@ -1046,6 +1048,10 @@ function ItemCard({ item, contas, currentUser, contaSelecionada, onRemover, onEd
             <ChevronDown size={12} className="absolute right-2 top-1/2 -translate-y-1/2 text-[#8C857C] pointer-events-none"/>
           </div>
         )}
+        <label className="flex items-center gap-2 text-sm text-[#2D2A26] dark:text-[#E8E0D5]">
+          <input type="checkbox" checked={novaRecorrencia} onChange={e=>setNovaRecorrencia(e.target.checked)} className="w-4 h-4 accent-[#8FB39A]" />
+          Recorrente (cópia manual para o mês seguinte)
+        </label>
         <div className="flex gap-2 items-center">
           <div className="relative flex-1">
             <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[#8C857C] text-sm font-semibold">R$</span>
