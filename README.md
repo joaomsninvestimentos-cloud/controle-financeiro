@@ -48,6 +48,33 @@ A general-purpose Next.js web application template with database initialization 
    - `pnpm db:migrate` — run migrations
    - `pnpm db:studio` — open Drizzle Studio
 
+## Despesas fixas (recorrência automática)
+
+Ao lançar, marcar **“Despesa fixa (repete todo mês)”** cria uma *série*
+(`recorrencias`) e materializa as ocorrências do mês inicial + os 12 seguintes.
+Não existe cron nem botão de copiar: as ocorrências são garantidas na leitura.
+
+- **Geração idempotente**: `GET /api/items?mes=YYYY-MM` chama
+  `sincronizarRecorrencias`, que calcula o que falta (`lib/recorrencia.ts`) e
+  insere com `ON CONFLICT DO NOTHING` sobre o índice único
+  `items (recorrencia_id, mes)`.
+- **Extensão automática**: abrir um mês além do horizonte gera até aquele mês
+  (limitado por `mes_fim`).
+- **Dia fixo**: dia 31 em mês de 30 cai no último dia do mês.
+- **Editar** uma ocorrência vale **deste mês em diante** (a série e os meses
+  seguintes são atualizados; o passado não muda).
+- **Remover** uma ocorrência = **pular aquele mês** (fica registrado em
+  `recorrencia_pulos` e não volta).
+- **Encerrar** (aba *Fixas*) mantém o mês atual e o histórico e apaga as
+  ocorrências futuras.
+- Lançamentos antigos com a etiqueta `recorrente` são convertidos em séries
+  automaticamente (`migrarRecorrentesLegados`), uma vez só.
+
+O schema é criado em runtime por `ensureRecorrenciaSchema` (idempotente, com
+`pg_advisory_xact_lock` para evitar corrida entre cold starts). O DDL vive em
+`lib/recorrencia-ddl.ts` e é testado contra um Postgres real (PGlite) em
+`lib/recorrencia-ddl.test.ts`.
+
 ## FinBot (chat com IA)
 
 O `POST /api/chat` fala com um provedor compatível com a API da Anthropic

@@ -6,11 +6,12 @@ import {
   PlusCircle, Trash2, TrendingUp, TrendingDown, Wallet,
   Sparkles, BarChart2, List, ChevronDown, LogOut, User, Loader2,
   Pencil, Check, X, ChevronLeft, ChevronRight, Building2, Plus,
-  Users, AlertTriangle, Target, RefreshCw, Download, Moon, Sun, FileText, Bell,
+  Users, AlertTriangle, Target, Repeat, Download, Moon, Sun, FileText, Bell,
   Search, DownloadCloud,
 } from 'lucide-react'
 import GraficosView from './GraficosView'
 import ContasModal from './ContasModal'
+import RecorrenciasModal from './RecorrenciasModal'
 import OrcamentosView from './OrcamentosView'
 import ChatAssistant from './ChatAssistant'
 import { useTheme } from './ThemeProvider'
@@ -37,6 +38,7 @@ export interface Item {
   mes: string
   contaId: string | null
   recorrente: boolean
+  recorrenciaId?: string | null
   userId?: string
   createdAt?: string
   autorNome?: string | null
@@ -192,6 +194,10 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
   const [data, setData] = useState(dataHoje())
   const [itemContaId, setItemContaId] = useState<string>('')
   const [recorrente, setRecorrente] = useState(false)
+  const [recorrenteAte, setRecorrenteAte] = useState('')
+  const [showFixas, setShowFixas] = useState(false)
+  const [aviso, setAviso] = useState('')
+  const avisoTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [aba, setAba] = useState<'lancamentos' | 'graficos' | 'orcamentos'>('lancamentos')
   const [saving, setSaving] = useState(false)
   const [dicaIndex] = useState(() => Math.floor(Math.random() * DICAS.length))
@@ -208,6 +214,12 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
     setErro(msg)
     if (erroTimer.current) clearTimeout(erroTimer.current)
     erroTimer.current = setTimeout(() => setErro(''), 4000)
+  }, [])
+
+  const mostrarAviso = useCallback((msg: string) => {
+    setAviso(msg)
+    if (avisoTimer.current) clearTimeout(avisoTimer.current)
+    avisoTimer.current = setTimeout(() => setAviso(''), 5000)
   }, [])
 
   // PWA
@@ -313,24 +325,33 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
           descricao: descricao.trim(), valor: valor.toFixed(2),
           tipo, categoria, data, mes: mesItem,
           contaId: itemContaId || null, recorrente,
+          ...(recorrente ? { recorrenteAte: recorrenteAte || null } : {}),
         }),
       })
       if (res.ok) {
-        const { item } = await res.json()
+        const { item, geradas } = await res.json() as { item: Item; geradas?: number }
         if (item.mes === mesSelecionado && (contaSelecionada === 'todas' || item.contaId === contaSelecionada)) {
           setItems(prev => [item, ...prev])
         }
         setTodosItems(prev => [item, ...prev])
+        if (recorrente) {
+          mostrarAviso(
+            geradas && geradas > 0
+              ? `Despesa fixa criada em "${item.descricao}" — já repetida em mais ${geradas} mês(es).`
+              : `Despesa fixa criada em "${item.descricao}".`,
+          )
+        }
         setDescricao('')
         setValorTexto('')
         setRecorrente(false)
+        setRecorrenteAte('')
       } else {
         mostrarErro('Não foi possível salvar. Tente novamente.')
       }
     } catch {
       mostrarErro('Sem conexão. Verifique sua internet.')
     } finally { setSaving(false) }
-  }, [descricao, valorTexto, tipo, categoria, data, itemContaId, recorrente, mesSelecionado, contaSelecionada, mostrarErro])
+  }, [descricao, valorTexto, tipo, categoria, data, itemContaId, recorrente, recorrenteAte, mesSelecionado, contaSelecionada, mostrarErro, mostrarAviso])
 
   // ── Adicionar lote ────────────────────────────────────────────────────────
   const adicionarLoteAoCarrinho = () => {
@@ -367,39 +388,6 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
       mostrarErro('Sem conexão. Verifique sua internet.')
     } finally { setSaving(false) }
   }, [lote, mesSelecionado, mostrarErro])
-
-  // ── Repetir recorrentes do mês anterior ──────────────────────────────────
-  const repetirRecorrentes = useCallback(async () => {
-    const mesAnterior = prevMes(mesSelecionado)
-    const params = new URLSearchParams({ mes: mesAnterior })
-    if (contaSelecionada !== 'todas') params.set('contaId', contaSelecionada)
-    const res = await fetch(`/api/items?${params}`)
-    const { items: itensAnt } = await res.json() as { items: Item[] }
-    const recorrentes = itensAnt.filter(i => i.recorrente)
-    if (recorrentes.length === 0) return alert('Nenhum lançamento recorrente no mês anterior.')
-    if (!confirm(`Copiar ${recorrentes.length} lançamento(s) recorrente(s) de ${fmtMes(mesAnterior)} para ${fmtMes(mesSelecionado)}?`)) return
-
-    const payload = recorrentes.map(i => ({
-      descricao: i.descricao,
-      valor: i.valor,
-      tipo: i.tipo as Tipo,
-      categoria: i.categoria,
-      data: `${mesSelecionado}-01`,
-      mes: mesSelecionado,
-      contaId: i.contaId,
-      recorrente: true,
-    }))
-    const postRes = await fetch('/api/items', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload),
-    })
-    if (postRes.ok) {
-      const { items: novos } = await postRes.json()
-      setItems(prev => [...novos, ...prev])
-      setTodosItems(prev => [...novos, ...prev])
-    }
-  }, [mesSelecionado, contaSelecionada])
 
   // ── Notificações de orçamento ────────────────────────────────────────────
   const solicitarNotificacoes = useCallback(async () => {
@@ -490,7 +478,11 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
 
   // ── Remover ──────────────────────────────────────────────────────────────
   const removerItem = useCallback(async (id: string) => {
-    if (!confirm('Excluir este lançamento?')) return
+    const alvo = items.find(i => i.id === id)
+    const pergunta = alvo?.recorrenciaId
+      ? `Pular "${alvo.descricao}" apenas em ${fmtMes(alvo.mes)}?\n\nA despesa fixa continua nos outros meses (para acabar de vez, use a aba Fixas).`
+      : 'Excluir este lançamento?'
+    if (!confirm(pergunta)) return
     const snapshot = items
     const snapshotTodos = todosItems
     setItems(prev => prev.filter(i => i.id !== id))
@@ -572,6 +564,11 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
         {erro && (
           <div className="bg-[#D4A0A0]/20 border border-[#D4A0A0]/40 rounded-2xl px-4 py-3 text-sm text-[#2D2A26] dark:text-[#E8E0D5] font-semibold">
             {erro}
+          </div>
+        )}
+        {aviso && (
+          <div className="bg-[#8FB39A]/20 border border-[#8FB39A]/40 rounded-2xl px-4 py-3 text-sm text-[#2D2A26] dark:text-[#E8E0D5] font-semibold">
+            {aviso}
           </div>
         )}
 
@@ -735,10 +732,30 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
               </div>
             </div>
           )}
-          <label className="flex items-center gap-2 rounded-2xl border border-[rgba(45,42,38,0.12)] dark:border-[rgba(255,255,255,0.07)] bg-[#FAF6F1] dark:bg-[#3E3935] px-4 py-3 cursor-pointer mb-3">
-            <input type="checkbox" checked={recorrente} onChange={e=>setRecorrente(e.target.checked)} className="w-4 h-4 accent-[#8FB39A]" />
-            <span className="text-sm text-[#2D2A26] dark:text-[#E8E0D5]">🔄 Recorrente (copiar manualmente para o mês seguinte)</span>
+          <label className="flex items-start gap-2 rounded-2xl border border-[rgba(45,42,38,0.12)] dark:border-[rgba(255,255,255,0.07)] bg-[#FAF6F1] dark:bg-[#3E3935] px-4 py-3 cursor-pointer mb-3">
+            <input type="checkbox" checked={recorrente} onChange={e=>{setRecorrente(e.target.checked); if(!e.target.checked) setRecorrenteAte('')}} className="w-4 h-4 accent-[#8FB39A] mt-0.5" />
+            <span className="text-sm text-[#2D2A26] dark:text-[#E8E0D5]">
+              🔁 Despesa fixa (repete todo mês)
+              <span className="block text-[11px] text-[#8C857C] dark:text-[#9E9890]">
+                Cria sozinha nos meses seguintes, até você encerrar na aba Fixas.
+              </span>
+            </span>
           </label>
+
+          {recorrente && (
+            <div className="mb-3">
+              <label className="block text-[11px] font-semibold text-[#8C857C] dark:text-[#9E9890] mb-1 ml-1">
+                Repetir até (opcional — em branco = até encerrar)
+              </label>
+              <input
+                type="month"
+                value={recorrenteAte}
+                min={data.slice(0, 7)}
+                onChange={e=>setRecorrenteAte(e.target.value)}
+                className="w-full rounded-2xl border border-[rgba(45,42,38,0.12)] dark:border-[rgba(255,255,255,0.07)] bg-[#FAF6F1] dark:bg-[#3E3935] px-4 py-3 text-sm text-[#2D2A26] dark:text-[#E8E0D5] outline-none focus:ring-2 focus:ring-[#8FB39A]/50 transition"
+              />
+            </div>
+          )}
 
           <div className="flex gap-3">
             <div className="relative flex-1">
@@ -786,11 +803,11 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
             <AbaBtn ativo={aba==='graficos'} onClick={()=>setAba('graficos')} label="📊 Gráficos" icon={<BarChart2 size={13} />} />
             <AbaBtn ativo={aba==='orcamentos'} onClick={()=>setAba('orcamentos')} label="🎯 Orçamentos" icon={<Target size={13} />} />
             <button
-              onClick={repetirRecorrentes}
+              onClick={() => setShowFixas(true)}
               className="flex items-center gap-1.5 rounded-full px-3 py-2 text-xs font-semibold transition-all active:scale-95 bg-white dark:bg-[#3E3935] text-[#8C857C] border border-[rgba(45,42,38,0.12)] dark:border-[rgba(255,255,255,0.07)] shadow-snug hover:text-[#8FB39A]"
-              title="Repetir lançamentos recorrentes do mês anterior"
+              title="Ver, pular ou encerrar as despesas fixas"
             >
-              <RefreshCw size={12} /> Recorrentes
+              <Repeat size={12} /> Fixas
             </button>
             {items.length > 0 && (
               <button
@@ -902,6 +919,24 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
       <ChatAssistant mesSelecionado={mesSelecionado} />
 
       {/* Modal Contas */}
+      {showFixas && (
+        <RecorrenciasModal
+          mesSelecionado={mesSelecionado}
+          contas={contas}
+          onClose={() => setShowFixas(false)}
+          onChanged={() => {
+            if (contaSelecionada !== 'todas') {
+              const params = new URLSearchParams({ mes: mesSelecionado, contaId: contaSelecionada })
+              fetch(`/api/items?${params}`).then(r => r.json()).then(d => setItems(d.items ?? [])).catch(() => {})
+            } else {
+              fetch(`/api/items?mes=${mesSelecionado}`).then(r => r.json()).then(d => setItems(d.items ?? [])).catch(() => {})
+            }
+            carregarTodosItems()
+          }}
+          onAviso={mostrarAviso}
+        />
+      )}
+
       {showContas && (
         <ContasModal
           contas={contas}
@@ -1048,9 +1083,16 @@ function ItemCard({ item, contas, currentUser, contaSelecionada, onRemover, onEd
             <ChevronDown size={12} className="absolute right-2 top-1/2 -translate-y-1/2 text-[#8C857C] pointer-events-none"/>
           </div>
         )}
-        <label className="flex items-center gap-2 text-sm text-[#2D2A26] dark:text-[#E8E0D5]">
-          <input type="checkbox" checked={novaRecorrencia} onChange={e=>setNovaRecorrencia(e.target.checked)} className="w-4 h-4 accent-[#8FB39A]" />
-          Recorrente (cópia manual para o mês seguinte)
+        <label className="flex items-start gap-2 text-sm text-[#2D2A26] dark:text-[#E8E0D5]">
+          <input type="checkbox" checked={novaRecorrencia} onChange={e=>setNovaRecorrencia(e.target.checked)} className="w-4 h-4 accent-[#8FB39A] mt-0.5" />
+          <span>
+            🔁 Despesa fixa
+            <span className="block text-[10px] text-[#8C857C] dark:text-[#9E9890]">
+              {item.recorrenciaId
+                ? 'Alterações valem deste mês em diante. Desmarcar tira só este mês da série.'
+                : 'Marcar transforma este lançamento em despesa fixa.'}
+            </span>
+          </span>
         </label>
         <div className="flex gap-2 items-center">
           <div className="relative flex-1">
@@ -1075,7 +1117,11 @@ function ItemCard({ item, contas, currentUser, contaSelecionada, onRemover, onEd
         <div className="flex-1 min-w-0">
           <p className="text-[#2D2A26] dark:text-[#E8E0D5] text-sm font-semibold truncate">
             {item.descricao}
-            {item.recorrente && <span className="ml-1.5 text-[10px] text-[#8C857C] bg-[#8C857C]/10 rounded-full px-1.5 py-0.5">🔄</span>}
+            {item.recorrenciaId ? (
+              <span className="ml-1.5 text-[10px] text-[#8FB39A] bg-[#8FB39A]/15 rounded-full px-1.5 py-0.5" title="Despesa fixa — repete todo mês">🔁 fixa</span>
+            ) : item.recorrente ? (
+              <span className="ml-1.5 text-[10px] text-[#8C857C] bg-[#8C857C]/10 rounded-full px-1.5 py-0.5" title="Marcado como recorrente (sem série)">🔄</span>
+            ) : null}
           </p>
           <p className="text-[#8C857C] dark:text-[#9E9890] text-xs flex items-center gap-1 flex-wrap">
             <span>{item.categoria} · {fmtData(item.data)}</span>

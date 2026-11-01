@@ -10,7 +10,7 @@
     "dev": "next dev -p 13000",
     "build": "next build",
     "start": "next start -p 13000",
-    "test": "node --import tsx --test lib/request.test.ts lib/llm.test.ts lib/finbot-fallback.test.ts",
+    "test": "node --import tsx --test lib/request.test.ts lib/llm.test.ts lib/finbot-fallback.test.ts lib/recorrencia.test.ts lib/recorrencia-ddl.test.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
@@ -81,6 +81,7 @@
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20250109.0",
+    "@electric-sql/pglite": "^0.5.14",
     "@opennextjs/cloudflare": "^1.19.10",
     "@tailwindcss/postcss": "^4.2.0",
     "@types/node": "^22",

@@ -50,6 +50,6 @@ export async function loadFinanceSnapshot(userId: string, mes: string) {
     orcsUsuario,
     totalMes: calc(itensMes),
     totalAnt: calc(itensMesAnt),
-    recorrentes: itensMes.filter(i => i.recorrente).length,
+    recorrentes: itensMes.filter(i => i.recorrente || i.recorrenciaId).length,
   }
 }
