@@ -112,7 +112,7 @@ importers:
         version: 17.3.1
       drizzle-orm:
         specifier: ^0.45.1
-        version: 0.45.1(@cloudflare/workers-types@4.20260519.1)(postgres@3.4.8)
+        version: 0.45.1(@cloudflare/workers-types@4.20260519.1)(@electric-sql/pglite@0.5.14)(postgres@3.4.8)
       embla-carousel-react:
         specifier: 8.6.0
         version: 8.6.0(react@19.2.4)
@@ -180,6 +180,9 @@ importers:
       '@cloudflare/workers-types':
         specifier: ^4.20250109.0
         version: 4.20260519.1
+      '@electric-sql/pglite':
+        specifier: ^0.5.14
+        version: 0.5.14
       '@opennextjs/cloudflare':
         specifier: ^1.19.10
         version: 1.19.10(next@16.2.6(@babel/core@7.29.0)(react-dom@19.2.4(react@19.2.4))(react@19.2.4))(wrangler@4.92.0(@cloudflare/workers-types@4.20260519.1))
@@ -616,6 +619,9 @@ packages:
     engines: {bun: '>=1', deno: '>=2.7.10', node: '>=16'}
     peerDependencies:
       '@noble/ciphers': ^1.0.0
+
+  '@electric-sql/pglite@0.5.14':
+    resolution: {integrity: sha512-aAQe7iArcFB2w1xtx91l3l9trxhMzD6aZf+WnosSHNhwgp70EJz80Igw/bHnW14fUEFYWPBoQ1sGom8Xc0Jttg==}
 
   '@emnapi/core@1.8.1':
     resolution: {integrity: sha512-AvT9QFpxK0Zd8J0jopedNm+w/2fIzvtPKPjqyw9jwvBaReTTqPBk9Hixaz7KbjimP+QNz605/XnjFcDAL2pqBg==}
@@ -6027,6 +6033,8 @@ snapshots:
     dependencies:
       '@noble/ciphers': 1.3.0
 
+  '@electric-sql/pglite@0.5.14': {}
+
   '@emnapi/core@1.8.1':
     dependencies:
       '@emnapi/wasi-threads': 1.1.0
@@ -8395,9 +8403,10 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260519.1)(postgres@3.4.8):
+  drizzle-orm@0.45.1(@cloudflare/workers-types@4.20260519.1)(@electric-sql/pglite@0.5.14)(postgres@3.4.8):
     optionalDependencies:
       '@cloudflare/workers-types': 4.20260519.1
+      '@electric-sql/pglite': 0.5.14
       postgres: 3.4.8
 
   dunder-proto@1.0.1:

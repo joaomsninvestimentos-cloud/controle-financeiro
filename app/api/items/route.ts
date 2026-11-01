@@ -3,6 +3,7 @@ import { db } from '@/db'
 import { items, contas, contaMembers, users } from '@/db/schemas/schema'
 import { eq, desc, and, inArray, or } from 'drizzle-orm'
 import { getAuthContext } from '@/lib/auth'
+import { criarRecorrencia, sincronizarRecorrencias, migrarRecorrentesLegados } from '@/lib/recorrencia-db'
 import { z } from 'zod'
 
 const itemSchema = z.object({
@@ -14,6 +15,8 @@ const itemSchema = z.object({
   mes: z.string().regex(/^\d{4}-\d{2}$/),
   contaId: z.string().nullable().optional(),
   recorrente: z.boolean().optional().default(false),
+  // Despesa fixa: "repete até" opcional (YYYY-MM). Ausente = até encerrar.
+  recorrenteAte: z.string().regex(/^\d{4}-\d{2}$/).nullable().optional(),
 })
 
 const bodySchema = z.union([itemSchema, z.array(itemSchema).min(1).max(50)])
@@ -61,6 +64,11 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: 'FORBIDDEN' }, { status: 403 })
     }
 
+    if (mes && !todos) {
+      await migrarRecorrentesLegados(ctx.user.id)
+      await sincronizarRecorrencias(ctx.user.id, mes)
+    }
+
     const conditions = [eq(items.contaId, contaId)]
     if (mes && !todos) conditions.push(eq(items.mes, mes))
 
@@ -71,6 +79,12 @@ export async function GET(req: NextRequest) {
       .orderBy(desc(items.data), desc(items.createdAt))
 
     return NextResponse.json({ items: await enrichItems(rows) })
+  }
+
+  // Antes de listar o mês, garante as ocorrências das despesas fixas.
+  if (mes && !todos) {
+    await migrarRecorrentesLegados(ctx.user.id)
+    await sincronizarRecorrencias(ctx.user.id, mes)
   }
 
   const acessiveis = await getContasAcessiveis(ctx.user.id)
@@ -107,24 +121,59 @@ export async function POST(req: NextRequest) {
     if (bloqueadas.length > 0) return NextResponse.json({ error: 'FORBIDDEN' }, { status: 403 })
   }
 
-  const rows = itemsToInsert.map(d => ({
-    id: crypto.randomUUID(),
-    userId: ctx.user.id,
-    contaId: d.contaId ?? null,
-    descricao: d.descricao,
-    valor: d.valor,
-    tipo: d.tipo,
-    categoria: d.categoria,
-    data: d.data,
-    mes: d.mes,
-    recorrente: d.recorrente ?? false,
-  }))
+  const fixas = itemsToInsert.filter(d => d.recorrente)
+  const avulsos = itemsToInsert.filter(d => !d.recorrente)
 
-  const inserted = await db.insert(items).values(rows).returning()
-  const enriched = await enrichItems(inserted)
+  const inseridos: typeof items.$inferSelect[] = []
+  const series: Array<{ id: string; descricao: string; mesFim: string | null; geradas: number }> = []
+  let geradas = 0
+
+  for (const d of fixas) {
+    const resultado = await criarRecorrencia({
+      userId: ctx.user.id,
+      contaId: d.contaId ?? null,
+      descricao: d.descricao,
+      valor: d.valor,
+      tipo: d.tipo,
+      categoria: d.categoria,
+      data: d.data,
+      ate: d.recorrenteAte ?? null,
+    })
+    if (resultado.primeiroItem) inseridos.push(resultado.primeiroItem)
+    geradas += resultado.geradas
+    series.push({
+      id: resultado.recorrencia.id,
+      descricao: resultado.recorrencia.descricao,
+      mesFim: resultado.recorrencia.mesFim,
+      geradas: resultado.geradas,
+    })
+  }
+
+  if (avulsos.length > 0) {
+    const rows = avulsos.map(d => ({
+      id: crypto.randomUUID(),
+      userId: ctx.user.id,
+      contaId: d.contaId ?? null,
+      descricao: d.descricao,
+      valor: d.valor,
+      tipo: d.tipo,
+      categoria: d.categoria,
+      data: d.data,
+      mes: d.mes,
+      recorrente: false,
+    }))
+    const inserted = await db.insert(items).values(rows).returning()
+    inseridos.push(...inserted)
+  }
+
+  const enriched = await enrichItems(inseridos)
 
   if (Array.isArray(parsed.data)) {
-    return NextResponse.json({ items: enriched }, { status: 201 })
+    return NextResponse.json({ items: enriched, recorrencias: series, geradas }, { status: 201 })
   }
-  return NextResponse.json({ item: enriched[0] }, { status: 201 })
+  return NextResponse.json({
+    item: enriched[0],
+    recorrencia: series[0] ?? null,
+    geradas: series[0]?.geradas ?? 0,
+  }, { status: 201 })
 }

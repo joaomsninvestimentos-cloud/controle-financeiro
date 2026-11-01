@@ -22,7 +22,7 @@ O QUE O APP JÁ TEM (não sugira de novo):
 - Lançamento em lote
 - Orçamentos por categoria com alerta 80%/100%
 - Alerta quando despesas passam 80% das receitas
-- Recorrentes (copiar do mês anterior)
+- Despesas fixas: lançamento que se repete automaticamente todo mês, com "repete até" opcional, pular mês e encerrar (aba Fixas)
 - Exportação CSV e PDF
 - Gráficos (barras, pizza, evolução)
 - PWA instalável, dark mode, busca de lançamentos
@@ -66,7 +66,7 @@ RESUMO ${params.mesLabel.toUpperCase()}:
 - Despesas: ${params.despesas}
 - Saldo: ${params.saldo}
 - Lançamentos: ${params.nLancamentos}
-- Recorrentes neste mês: ${params.recorrentes}
+- Despesas fixas com lançamento neste mês: ${params.recorrentes}
 
 COMPARATIVO ${params.mesAntLabel.toUpperCase()}:
 - Receitas: ${params.receitasAnt}

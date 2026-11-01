@@ -79,7 +79,33 @@ export const items = pgTable('items', {
   data: text('data').notNull(),            // YYYY-MM-DD
   mes: text('mes').notNull(),              // YYYY-MM
   recorrente: boolean('recorrente').notNull().default(false),
+  recorrenciaId: text('recorrencia_id'),   // série de despesa fixa (nullable)
   createdAt: timestamp('created_at').notNull().defaultNow(),
+})
+
+// Séries de despesa fixa (recorrência real: repete todo mês até encerrar)
+export const recorrencias = pgTable('recorrencias', {
+  id: text('id').primaryKey(),
+  userId: text('user_id')
+    .notNull()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  contaId: text('conta_id')
+    .references(() => contas.id, { onDelete: 'set null' }),
+  descricao: text('descricao').notNull(),
+  valor: text('valor').notNull(),
+  tipo: text('tipo').notNull(),            // 'despesa' | 'receita'
+  categoria: text('categoria').notNull(),
+  dia: text('dia').notNull().default('1'), // dia do mês (string para manter padrão)
+  mesInicio: text('mes_inicio').notNull(), // YYYY-MM
+  mesFim: text('mes_fim'),                 // YYYY-MM (null = até encerrar)
+  ativa: boolean('ativa').notNull().default(true),
+  createdAt: timestamp('created_at').notNull().defaultNow(),
+})
+
+// Meses pulados manualmente em uma série — não devem ser recriados
+export const recorrenciaPulos = pgTable('recorrencia_pulos', {
+  recorrenciaId: text('recorrencia_id').notNull(),
+  mes: text('mes').notNull(),
 })
 
 export const melhorias = pgTable('melhorias', {
