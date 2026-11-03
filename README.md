@@ -54,7 +54,9 @@ A general-purpose Next.js web application template with database initialization 
   (e por backfill no primeiro acesso de quem já existia). Só o dono vê.
 - **Casa** (`tipo = 'casa'`): compartilhada. Os dois lançam e veem, com o autor
   de cada lançamento (a API já bloqueia acesso a conta alheia com 403).
-- **Tudo**: soma de todas as contas acessíveis.
+- **Somar tudo**: soma de todas as contas acessíveis. **Não é conta**: nada é lançado nela, então
+  renomear a visão não move lançamentos. O nome e a visibilidade são ajustáveis em `+` → **Visão somada**
+  (preferência salva no aparelho).
 - **Convite por link**: `POST /api/contas/[id]/invite` devolve `link` e
   `whatsapp`, com validade de 7 dias (`lib/contas-logic.ts`). O aceite acontece
   em `/convite/[token]` → `POST /api/convites/[token]`, e o login/cadastro

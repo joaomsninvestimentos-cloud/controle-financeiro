@@ -207,5 +207,23 @@ export function avisoExcluirConta(nome: string, temOutrasPessoas: boolean): stri
   return [base, consequencia, dados].filter(Boolean).join('\n\n')
 }
 
-/** Rótulo da visão consolidada — deixa explícito que não é conta. */
+/** Rótulo padrão da visão consolidada — deixa explícito que não é conta. */
 export const ROTULO_SOMA = 'Somar tudo'
+export const ROTULO_SOMA_MAX = 18
+
+/**
+ * Nome que o usuário dá à visão somada. É só um rótulo (não existe conta por
+ * trás), então aceitamos qualquer coisa curta e caímos no padrão se vazio.
+ */
+export function normalizarRotuloSoma(bruto?: string | null): string {
+  const limpo = (bruto ?? '').replace(/\s+/g, ' ').trim().slice(0, ROTULO_SOMA_MAX).trim()
+  return limpo || ROTULO_SOMA
+}
+
+/**
+ * A visão somada só é escondida da barra quando não está ativa — senão o
+ * usuário ficaria preso nela sem conseguir voltar.
+ */
+export function mostrarSoma(visivel: boolean, selecionada: string | 'tudo'): boolean {
+  return visivel || selecionada === 'tudo'
+}

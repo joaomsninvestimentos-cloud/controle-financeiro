@@ -14,7 +14,7 @@ import ContasModal from './ContasModal'
 import RecorrenciasModal from './RecorrenciasModal'
 import ContaSwitcher from './ContaSwitcher'
 import EditarContaModal from './EditarContaModal'
-import { resolverSelecao } from '@/lib/contas-logic'
+import { normalizarRotuloSoma, resolverSelecao, ROTULO_SOMA } from '@/lib/contas-logic'
 import OrcamentosView from './OrcamentosView'
 import ChatAssistant from './ChatAssistant'
 import { useTheme } from './ThemeProvider'
@@ -208,6 +208,9 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
   const [dicaIndex] = useState(() => Math.floor(Math.random() * DICAS.length))
   const [showContas, setShowContas] = useState(false)
   const [contaEmEdicao, setContaEmEdicao] = useState<Conta | null>(null)
+  // Rótulo/visibilidade da visão somada: preferência do aparelho (não é conta).
+  const [rotuloSoma, setRotuloSoma] = useState(ROTULO_SOMA)
+  const [somaVisivel, setSomaVisivel] = useState(true)
   const [modoLote, setModoLote] = useState(false)
   const [lote, setLote] = useState<Array<{descricao:string;valor:string;tipo:Tipo;categoria:string;data:string;contaId:string;recorrente:boolean}>>([])
   const [busca, setBusca] = useState('')
@@ -267,6 +270,25 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
   }, [])
   useEffect(() => { carregarContas() }, [carregarContas])
 
+  useEffect(() => {
+    try {
+      const rotulo = localStorage.getItem('soma-rotulo')
+      if (rotulo) setRotuloSoma(normalizarRotuloSoma(rotulo))
+      const visivel = localStorage.getItem('soma-visivel')
+      if (visivel !== null) setSomaVisivel(visivel !== 'oculta')
+    } catch { /* modo privado */ }
+  }, [])
+
+  const salvarAjustesSoma = useCallback((rotulo: string, visivel: boolean) => {
+    const nome = normalizarRotuloSoma(rotulo)
+    setRotuloSoma(nome)
+    setSomaVisivel(visivel)
+    try {
+      localStorage.setItem('soma-rotulo', nome)
+      localStorage.setItem('soma-visivel', visivel ? 'visivel' : 'oculta')
+    } catch { /* modo privado */ }
+  }, [])
+
   // Guarda a conta escolhida para abrir nela da próxima vez
   const selecionarConta = useCallback((valor: string | 'tudo') => {
     setContaSelecionada(valor)
@@ -285,7 +307,7 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
   const carregarTodosItems = useCallback(() => {
     const params = contaSelecionada !== 'tudo'
       ? `?contaId=${contaSelecionada}&todos=1`
-      : `?todos=1`
+      : '?todos=1'
     fetch(`/api/items${params}`)
       .then(r => r.json())
       .then(d => setTodosItems(d.items ?? []))
@@ -651,6 +673,8 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
             onSelecionar={selecionarConta}
             onGerenciar={() => setShowContas(true)}
             onEditar={c => setContaEmEdicao(c)}
+            rotuloSoma={rotuloSoma}
+            somaVisivel={somaVisivel}
           />
         )}
 
@@ -728,7 +752,7 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
         <div className="bg-white dark:bg-[#342F2B] rounded-3xl p-5 shadow-snug">
           <div className="flex items-center justify-between mb-4">
             <h2 className="font-bold text-[#2D2A26] dark:text-[#E8E0D5] text-sm">
-              {modoLote ? '📋 Lançamentos em lote' : `Adicionar em `}
+              {modoLote ? '📋 Lançamentos em lote' : 'Adicionar em '}
               {!modoLote && <span className="text-[#8FB39A]">{fmtMes(mesSelecionado)}</span>}
             </h2>
             <button
@@ -1031,6 +1055,9 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
             carregarContas()
           }}
           onEditarConta={c => { setShowContas(false); setContaEmEdicao(c) }}
+          rotuloSoma={rotuloSoma}
+          somaVisivel={somaVisivel}
+          onSalvarAjustesSoma={salvarAjustesSoma}
         />
       )}
     </div>

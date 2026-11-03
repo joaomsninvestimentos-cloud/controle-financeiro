@@ -3,10 +3,10 @@
 import { useState } from 'react'
 import {
   Trash2, X, Plus, Users, UserPlus, Loader2, Mail, Copy, Check,
-  Home, User, Link2, MessageCircle, Pencil,
+  Home, User, Link2, MessageCircle, Pencil, Layers,
 } from 'lucide-react'
 import { type Conta, fmt, parsearValor, mascaraReal } from './FinanceApp'
-import { podeEditarConta, podeExcluirConta } from '@/lib/contas-logic'
+import { normalizarRotuloSoma, podeEditarConta, podeExcluirConta } from '@/lib/contas-logic'
 
 const CORES_CONTA = ['#8FB39A','#B8A9D4','#D4A0A0','#E8A87C','#A0B8D4','#A0D4C4','#E8C4A0','#2D2A26']
 const EMOJIS_CONTA = ['🏦','💳','💰','🏧','💵','🪙','💼','🏪']
@@ -27,10 +27,14 @@ interface Props {
   onGerarConvite: (contaId: string, email?: string) => Promise<ConviteGerado | { erro: string }>
   onRemoveMembro: (contaId: string, memberId: string) => Promise<void>
   onEditarConta: (conta: Conta) => void
+  rotuloSoma: string
+  somaVisivel: boolean
+  onSalvarAjustesSoma: (rotulo: string, visivel: boolean) => void
 }
 
 export default function ContasModal({
   contas, onClose, mesSelecionado, onAdd, onDelete, onGerarConvite, onRemoveMembro, onEditarConta,
+  rotuloSoma, somaVisivel, onSalvarAjustesSoma,
 }: Props) {
   const [adding, setAdding] = useState(false)
   const [nome, setNome] = useState('')
@@ -46,6 +50,9 @@ export default function ContasModal({
   const [erroConvite, setErroConvite] = useState('')
   const [inviting, setInviting] = useState(false)
   const [copiado, setCopiado] = useState(false)
+  const [textoSoma, setTextoSoma] = useState(rotuloSoma)
+  const [verSoma, setVerSoma] = useState(somaVisivel)
+  const [ajusteSalvo, setAjusteSalvo] = useState(false)
 
   const salvar = async () => {
     if (!nome.trim()) return
@@ -106,6 +113,51 @@ export default function ContasModal({
           <strong>Pessoal</strong> é só sua. <strong>Casa</strong> é compartilhada: quem entra vê e lança junto.
           Use o ✏️ para renomear.
         </p>
+
+        {/* A visão somada não é conta: é a soma. Aqui só se ajusta o rótulo. */}
+        <div className="rounded-2xl border border-dashed border-[rgba(45,42,38,0.18)] dark:border-[rgba(255,255,255,0.14)] p-3 space-y-2.5">
+          <div className="flex items-start gap-2">
+            <Layers size={14} className="text-[#8FB39A] mt-0.5 shrink-0" />
+            <div className="min-w-0">
+              <p className="text-xs font-bold text-[#2D2A26] dark:text-[#E8E0D5]">Visão somada</p>
+              <p className="text-[10px] text-[#8C857C] dark:text-[#9E9890] leading-relaxed">
+                Não é uma conta: ela mostra a <strong>soma</strong> das suas contas. Nada é lançado nela,
+                então renomear aqui não move lançamentos.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <input
+              value={textoSoma}
+              onChange={e => { setTextoSoma(e.target.value); setAjusteSalvo(false) }}
+              maxLength={18}
+              aria-label="Nome da visão somada"
+              placeholder="Somar tudo"
+              className="flex-1 min-w-0 rounded-xl border border-[rgba(45,42,38,0.12)] dark:border-[rgba(255,255,255,0.07)] bg-[#FAF6F1] dark:bg-[#3E3935] px-3 py-2 text-xs text-[#2D2A26] dark:text-[#E8E0D5] outline-none focus:ring-2 focus:ring-[#8FB39A]/50"
+            />
+            <button
+              onClick={() => {
+                onSalvarAjustesSoma(textoSoma, verSoma)
+                setTextoSoma(normalizarRotuloSoma(textoSoma))
+                setAjusteSalvo(true)
+              }}
+              className="shrink-0 rounded-xl bg-[#8FB39A] text-white text-xs font-bold px-3 py-2 active:scale-95 transition"
+            >
+              {ajusteSalvo ? 'Salvo' : 'Salvar'}
+            </button>
+          </div>
+
+          <label className="flex items-center gap-2 text-[11px] text-[#8C857C] dark:text-[#9E9890]">
+            <input
+              type="checkbox"
+              checked={verSoma}
+              onChange={e => { setVerSoma(e.target.checked); setAjusteSalvo(false); onSalvarAjustesSoma(textoSoma, e.target.checked) }}
+              className="w-4 h-4 rounded accent-[#8FB39A]"
+            />
+            Mostrar essa visão na barra (se desmarcar, ela continua acessível quando estiver ativa)
+          </label>
+        </div>
 
         {contas.length === 0 && !adding && (
           <p className="text-sm text-[#8C857C] text-center py-4">Nenhuma conta ainda.</p>

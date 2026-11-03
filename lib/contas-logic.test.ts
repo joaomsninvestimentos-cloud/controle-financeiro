@@ -16,7 +16,10 @@ import {
   normalizarContaSelecionada,
   podeEditarConta,
   podeExcluirConta,
+  normalizarRotuloSoma,
+  mostrarSoma,
   ROTULO_SOMA,
+  ROTULO_SOMA_MAX,
   resolverSelecao,
   rotuloVisao,
   validadeConvite,
@@ -147,6 +150,22 @@ test('link do WhatsApp contém a conta e o link codificados', () => {
 
 test('"Somar tudo" não é conta: rótulo explícito', () => {
   assert.equal(ROTULO_SOMA, 'Somar tudo')
+})
+
+test('o rótulo da visão somada pode ser renomeado pelo usuário', () => {
+  assert.equal(normalizarRotuloSoma('Tudo'), 'Tudo')
+  assert.equal(normalizarRotuloSoma('  Meu   total  '), 'Meu total')
+  assert.equal(normalizarRotuloSoma(''), ROTULO_SOMA)
+  assert.equal(normalizarRotuloSoma(null), ROTULO_SOMA)
+  assert.equal(normalizarRotuloSoma('x'.repeat(50)).length, ROTULO_SOMA_MAX)
+  // cifrão/quebra de linha não quebram o layout da barra
+  assert.equal(normalizarRotuloSoma('a\nb'), 'a b')
+})
+
+test('esconder a soma não pode prender o usuário nela', () => {
+  assert.equal(mostrarSoma(true, 'tudo'), true)
+  assert.equal(mostrarSoma(false, 'tudo'), true) // ativa: continua visível
+  assert.equal(mostrarSoma(false, 'conta-1'), false)
 })
 
 test('conta pessoal pode ser renomeada, mas não excluída', () => {
