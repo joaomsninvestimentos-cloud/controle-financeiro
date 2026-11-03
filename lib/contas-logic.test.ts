@@ -11,7 +11,12 @@ import {
   linkWhatsApp,
   nomeContaPessoal,
   nomeCurto,
+  avisoExcluirConta,
+  motivoNaoExcluir,
   normalizarContaSelecionada,
+  podeEditarConta,
+  podeExcluirConta,
+  ROTULO_SOMA,
   resolverSelecao,
   rotuloVisao,
   validadeConvite,
@@ -138,4 +143,40 @@ test('link do WhatsApp contém a conta e o link codificados', () => {
   assert.match(texto, /"Casa"/)
   assert.match(texto, /https:\/\/app\.com\/convite\/abc/)
   assert.match(texto, /7 dias/)
+})
+
+test('"Somar tudo" não é conta: rótulo explícito', () => {
+  assert.equal(ROTULO_SOMA, 'Somar tudo')
+})
+
+test('conta pessoal pode ser renomeada, mas não excluída', () => {
+  const pessoal = { tipo: 'pessoal' as const, isOwner: true }
+  assert.equal(podeEditarConta(pessoal), true)
+  assert.equal(podeExcluirConta(pessoal), false)
+  assert.match(motivoNaoExcluir(pessoal) ?? '', /não pode ser excluída/)
+})
+
+test('conta da casa pode ser editada e excluída pelo dono', () => {
+  const casa = { tipo: 'casa' as const, isOwner: true }
+  assert.equal(podeEditarConta(casa), true)
+  assert.equal(podeExcluirConta(casa), true)
+  assert.equal(motivoNaoExcluir(casa), null)
+})
+
+test('quem não é dono não edita nem exclui (mas usa a conta)', () => {
+  const deOutro = { tipo: 'casa' as const, isOwner: false }
+  assert.equal(podeEditarConta(deOutro), false)
+  assert.equal(podeExcluirConta(deOutro), false)
+  assert.match(motivoNaoExcluir(deOutro) ?? '', /quem criou/)
+})
+
+test('aviso de exclusão explica o destino dos lançamentos', () => {
+  const so = avisoExcluirConta('Casa', false)
+  assert.match(so, /Excluir a conta "Casa"/)
+  assert.doesNotMatch(so, /perde o acesso/)
+
+  const comOutra = avisoExcluirConta('Casa', true)
+  assert.match(comOutra, /perde o acesso/)
+  assert.match(comOutra, /lançamentos continuam/i)
+  assert.match(comOutra, /orçamentos dessa conta são apagados/)
 })

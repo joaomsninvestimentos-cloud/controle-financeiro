@@ -13,6 +13,7 @@ import GraficosView from './GraficosView'
 import ContasModal from './ContasModal'
 import RecorrenciasModal from './RecorrenciasModal'
 import ContaSwitcher from './ContaSwitcher'
+import EditarContaModal from './EditarContaModal'
 import { resolverSelecao } from '@/lib/contas-logic'
 import OrcamentosView from './OrcamentosView'
 import ChatAssistant from './ChatAssistant'
@@ -206,6 +207,7 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
   const [saving, setSaving] = useState(false)
   const [dicaIndex] = useState(() => Math.floor(Math.random() * DICAS.length))
   const [showContas, setShowContas] = useState(false)
+  const [contaEmEdicao, setContaEmEdicao] = useState<Conta | null>(null)
   const [modoLote, setModoLote] = useState(false)
   const [lote, setLote] = useState<Array<{descricao:string;valor:string;tipo:Tipo;categoria:string;data:string;contaId:string;recorrente:boolean}>>([])
   const [busca, setBusca] = useState('')
@@ -520,6 +522,34 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
     }
   }, [items, todosItems, mostrarErro])
 
+  // ── Editar / excluir conta (direto da barra) ──────────────────────────────
+  const atualizarConta = useCallback(async (id: string, campos: { nome: string; cor: string; emoji: string }) => {
+    const res = await fetch(`/api/contas/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(campos),
+    })
+    if (!res.ok) {
+      mostrarErro(res.status === 403 ? 'Só quem criou a conta pode alterá-la.' : 'Não foi possível salvar a conta.')
+      return
+    }
+    carregarContas()
+    mostrarAviso('Conta atualizada.')
+  }, [carregarContas, mostrarErro, mostrarAviso])
+
+  const excluirConta = useCallback(async (id: string) => {
+    const res = await fetch(`/api/contas/${id}`, { method: 'DELETE' })
+    if (!res.ok) {
+      mostrarErro('Não foi possível excluir a conta.')
+      return
+    }
+    if (contaSelecionada === id) selecionarConta('tudo')
+    setContaEmEdicao(null)
+    carregarContas()
+    carregarTodosItems()
+    mostrarAviso('Conta excluída. Os lançamentos continuam em "Somar tudo".')
+  }, [contaSelecionada, selecionarConta, carregarContas, carregarTodosItems, mostrarErro, mostrarAviso])
+
   // ── Logout ───────────────────────────────────────────────────────────────
   const logout = async () => {
     await fetch('/api/auth/me', { method: 'POST' })
@@ -620,6 +650,7 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
             selecionada={contaSelecionada}
             onSelecionar={selecionarConta}
             onGerenciar={() => setShowContas(true)}
+            onEditar={c => setContaEmEdicao(c)}
           />
         )}
 
@@ -947,6 +978,15 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
         />
       )}
 
+      {contaEmEdicao && (
+        <EditarContaModal
+          conta={contaEmEdicao}
+          onClose={() => setContaEmEdicao(null)}
+          onSalvar={async campos => { await atualizarConta(contaEmEdicao.id, campos) }}
+          onExcluir={async () => { await excluirConta(contaEmEdicao.id) }}
+        />
+      )}
+
       {showContas && (
         <ContasModal
           contas={contas}
@@ -990,6 +1030,7 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
             await fetch(`/api/contas/${contaId}/invite?memberId=${memberId}`, { method: 'DELETE' })
             carregarContas()
           }}
+          onEditarConta={c => { setShowContas(false); setContaEmEdicao(c) }}
         />
       )}
     </div>

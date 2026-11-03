@@ -3,9 +3,10 @@
 import { useState } from 'react'
 import {
   Trash2, X, Plus, Users, UserPlus, Loader2, Mail, Copy, Check,
-  Home, User, Link2, MessageCircle,
+  Home, User, Link2, MessageCircle, Pencil,
 } from 'lucide-react'
 import { type Conta, fmt, parsearValor, mascaraReal } from './FinanceApp'
+import { podeEditarConta, podeExcluirConta } from '@/lib/contas-logic'
 
 const CORES_CONTA = ['#8FB39A','#B8A9D4','#D4A0A0','#E8A87C','#A0B8D4','#A0D4C4','#E8C4A0','#2D2A26']
 const EMOJIS_CONTA = ['🏦','💳','💰','🏧','💵','🪙','💼','🏪']
@@ -25,10 +26,11 @@ interface Props {
   onDelete: (id: string) => Promise<void>
   onGerarConvite: (contaId: string, email?: string) => Promise<ConviteGerado | { erro: string }>
   onRemoveMembro: (contaId: string, memberId: string) => Promise<void>
+  onEditarConta: (conta: Conta) => void
 }
 
 export default function ContasModal({
-  contas, onClose, mesSelecionado, onAdd, onDelete, onGerarConvite, onRemoveMembro,
+  contas, onClose, mesSelecionado, onAdd, onDelete, onGerarConvite, onRemoveMembro, onEditarConta,
 }: Props) {
   const [adding, setAdding] = useState(false)
   const [nome, setNome] = useState('')
@@ -102,6 +104,7 @@ export default function ContasModal({
 
         <p className="text-[11px] text-[#8C857C] dark:text-[#9E9890]">
           <strong>Pessoal</strong> é só sua. <strong>Casa</strong> é compartilhada: quem entra vê e lança junto.
+          Use o ✏️ para renomear.
         </p>
 
         {contas.length === 0 && !adding && (
@@ -130,8 +133,24 @@ export default function ContasModal({
                   <p className="text-xs text-[#8C857C]">Saldo inicial: {fmt(parsearValor(c.saldoInicial))}</p>
                 </div>
                 <span className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: c.cor }} />
-                {c.isOwner && (
-                  <button onClick={() => onDelete(c.id)} className="p-1.5 rounded-full text-[#8C857C] hover:text-[#D4A0A0] hover:bg-[#D4A0A0]/10 transition" aria-label="Excluir conta">
+                {podeEditarConta({ tipo, isOwner: c.isOwner }) && (
+                  <button
+                    onClick={() => onEditarConta(c)}
+                    className="p-1.5 rounded-full text-[#8C857C] hover:text-[#8FB39A] hover:bg-[#8FB39A]/10 transition"
+                    aria-label={`Renomear a conta ${c.nome}`}
+                    title="Renomear / trocar cor"
+                  >
+                    <Pencil size={14} />
+                  </button>
+                )}
+                {podeExcluirConta({ tipo, isOwner: c.isOwner }) && (
+                  <button
+                    onClick={() => {
+                      if (confirm(`Excluir a conta "${c.nome}"?\n\nOs lançamentos continuam no app, mas ficam sem conta.`)) onDelete(c.id)
+                    }}
+                    className="p-1.5 rounded-full text-[#8C857C] hover:text-[#D4A0A0] hover:bg-[#D4A0A0]/10 transition"
+                    aria-label={`Excluir a conta ${c.nome}`}
+                  >
                     <Trash2 size={14} />
                   </button>
                 )}

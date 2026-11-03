@@ -170,3 +170,42 @@ export function nomeContaPessoal(nomeUsuario: string): string {
   const primeiro = nomeCurto(nomeUsuario).replace(/…$/, '')
   return primeiro ? primeiro : 'Minha conta'
 }
+
+/* ─────────────── O que pode ser editado/excluído ─────────────── */
+
+export interface RegrasConta {
+  tipo: TipoConta
+  isOwner: boolean
+}
+
+/**
+ * "Tudo" não é conta: é a soma. Não pode ser renomeado nem excluído.
+ * A conta pessoal pode ser renomeada (é o seu espaço), mas não excluída —
+ * o app precisa dela e a recriaria no próximo acesso.
+ */
+export function podeEditarConta(c: RegrasConta): boolean {
+  return c.isOwner
+}
+
+export function podeExcluirConta(c: RegrasConta): boolean {
+  return c.isOwner && c.tipo === 'casa'
+}
+
+export function motivoNaoExcluir(c: RegrasConta): string | null {
+  if (!c.isOwner) return 'Só quem criou a conta pode excluí-la.'
+  if (c.tipo === 'pessoal') return 'Sua conta pessoal não pode ser excluída — é o seu espaço privado. Você pode renomeá-la.'
+  return null
+}
+
+/** Texto de confirmação de exclusão (diz o que acontece com o histórico). */
+export function avisoExcluirConta(nome: string, temOutrasPessoas: boolean): string {
+  const base = `Excluir a conta "${nome}"?`
+  const consequencia = temOutrasPessoas
+    ? 'A outra pessoa perde o acesso a ela.'
+    : ''
+  const dados = 'Os lançamentos continuam no app, mas ficam sem conta (aparecem só em "Somar"). Os orçamentos dessa conta são apagados.'
+  return [base, consequencia, dados].filter(Boolean).join('\n\n')
+}
+
+/** Rótulo da visão consolidada — deixa explícito que não é conta. */
+export const ROTULO_SOMA = 'Somar tudo'
