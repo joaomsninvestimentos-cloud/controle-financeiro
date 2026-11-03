@@ -1,8 +1,10 @@
 import type { NextConfig } from 'next';
 import dotenv from 'dotenv';
 
-// Load .env into process.env (dotenv.populate is used internally to inject)
-dotenv.config({ path: '.env', override: true });
+// Carrega .env/.env.local apenas em desenvolvimento. `override: false` garante
+// que variáveis definidas pela plataforma (Vercel/CI) tenham prioridade — o
+// arquivo local nunca sobrescreve o ambiente de produção.
+dotenv.config({ path: ['.env.local', '.env'], override: false, quiet: true });
 
 const nextConfig: NextConfig = {
   reactStrictMode: false,
