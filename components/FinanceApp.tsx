@@ -246,7 +246,7 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
   const carregarTodosItems = useCallback(() => {
     const params = contaSelecionada !== 'todas'
       ? `?contaId=${contaSelecionada}&todos=1`
-      : `?todos=1`
+      : '?todos=1'
     fetch(`/api/items${params}`)
       .then(r => r.json())
       .then(d => setTodosItems(d.items ?? []))
@@ -526,6 +526,65 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
     setInstallPrompt(null)
   }
 
+  const previewMoveConta = useCallback(async (
+    deContaId: string,
+    paraContaId: string,
+    incluirLancamentos: boolean,
+    incluirOrcamentos: boolean,
+  ) => {
+    const params = new URLSearchParams({
+      paraContaId,
+      incluirLancamentos: incluirLancamentos ? '1' : '0',
+      incluirOrcamentos: incluirOrcamentos ? '1' : '0',
+    })
+    try {
+      const res = await fetch(`/api/contas/${deContaId}/mover?${params}`)
+      if (!res.ok) return null
+      return await res.json()
+    } catch {
+      return null
+    }
+  }, [])
+
+  const moverConta = useCallback(async (
+    deContaId: string,
+    paraContaId: string,
+    incluirLancamentos: boolean,
+    incluirOrcamentos: boolean,
+  ) => {
+    try {
+      const res = await fetch(`/api/contas/${deContaId}/mover`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ paraContaId, incluirLancamentos, incluirOrcamentos }),
+      })
+      if (!res.ok) {
+        mostrarErro('Não foi possível transferir os registros.')
+        return null
+      }
+      const data = await res.json()
+      carregarTodosItems()
+      const params = new URLSearchParams({ mes: mesSelecionado })
+      if (contaSelecionada !== 'todas') params.set('contaId', contaSelecionada)
+      const itensRes = await fetch(`/api/items?${params}`)
+      if (itensRes.ok) {
+        const d = await itensRes.json()
+        setItems(d.items ?? [])
+      }
+      if (incluirOrcamentos) {
+        const orcRes = await fetch(`/api/orcamentos?mes=${mesSelecionado}`)
+        if (orcRes.ok) {
+          const d = await orcRes.json()
+          setOrcamentos(d.orcamentos ?? [])
+        }
+      }
+      return data
+    } catch {
+      mostrarErro('Sem conexão. Verifique sua internet.')
+      return null
+    }
+  }, [carregarTodosItems, mesSelecionado, contaSelecionada, mostrarErro])
+
   return (
     <div className="min-h-screen bg-[#FAF6F1] dark:bg-[#2B2825] font-nunito pb-10 transition-colors duration-300">
       {/* Header */}
@@ -690,7 +749,7 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
         <div className="bg-white dark:bg-[#342F2B] rounded-3xl p-5 shadow-snug">
           <div className="flex items-center justify-between mb-4">
             <h2 className="font-bold text-[#2D2A26] dark:text-[#E8E0D5] text-sm">
-              {modoLote ? '📋 Lançamentos em lote' : `Adicionar em `}
+              {modoLote ? '📋 Lançamentos em lote' : 'Adicionar em '}
               {!modoLote && <span className="text-[#8FB39A]">{fmtMes(mesSelecionado)}</span>}
             </h2>
             <button
@@ -932,6 +991,8 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
             await fetch(`/api/contas/${contaId}/invite?memberId=${memberId}`, { method: 'DELETE' })
             carregarContas()
           }}
+          onPreviewMove={previewMoveConta}
+          onMove={moverConta}
         />
       )}
     </div>

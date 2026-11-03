@@ -1,11 +1,19 @@
 'use client'
 
-import { useState } from 'react'
-import { Trash2, X, Plus, Users, UserPlus, Loader2, Mail, CheckCircle } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Trash2, X, Plus, Users, UserPlus, Loader2, Mail, CheckCircle, ArrowRightLeft } from 'lucide-react'
 import { type Conta, fmt, parsearValor, mascaraReal, fmtMes } from './FinanceApp'
 
 const CORES_CONTA = ['#8FB39A','#B8A9D4','#D4A0A0','#E8A87C','#A0B8D4','#A0D4C4','#E8C4A0','#2D2A26']
 const EMOJIS_CONTA = ['🏦','💳','💰','🏧','💵','🪙','💼','🏪']
+
+export type MoveResult = {
+  ok: boolean
+  fixas: number
+  lancamentos: number
+  orcamentos: number
+  orcamentosIgnorados: number
+}
 
 interface Props {
   contas: Conta[]
@@ -15,9 +23,13 @@ interface Props {
   onDelete: (id: string) => Promise<void>
   onInvite: (contaId: string, email: string) => Promise<string>
   onRemoveMembro: (contaId: string, memberId: string) => Promise<void>
+  onPreviewMove: (deContaId: string, paraContaId: string, incluirLancamentos: boolean, incluirOrcamentos: boolean) => Promise<MoveResult | null>
+  onMove: (deContaId: string, paraContaId: string, incluirLancamentos: boolean, incluirOrcamentos: boolean) => Promise<MoveResult | null>
 }
 
-export default function ContasModal({ contas, onClose, mesSelecionado, onAdd, onDelete, onInvite, onRemoveMembro }: Props) {
+export default function ContasModal({
+  contas, onClose, mesSelecionado, onAdd, onDelete, onInvite, onRemoveMembro, onPreviewMove, onMove,
+}: Props) {
   const [adding, setAdding] = useState(false)
   const [nome, setNome] = useState('')
   const [cor, setCor] = useState(CORES_CONTA[0])
@@ -29,6 +41,29 @@ export default function ContasModal({ contas, onClose, mesSelecionado, onAdd, on
   const [inviteEmail, setInviteEmail] = useState('')
   const [inviteMsg, setInviteMsg] = useState('')
   const [inviting, setInviting] = useState(false)
+
+  const [moveContaId, setMoveContaId] = useState<string | null>(null)
+  const [paraContaId, setParaContaId] = useState('')
+  const [incluirLancamentos, setIncluirLancamentos] = useState(true)
+  const [incluirOrcamentos, setIncluirOrcamentos] = useState(false)
+  const [preview, setPreview] = useState<MoveResult | null>(null)
+  const [previewing, setPreviewing] = useState(false)
+  const [moving, setMoving] = useState(false)
+  const [moveMsg, setMoveMsg] = useState('')
+  const [confirmMove, setConfirmMove] = useState(false)
+
+  useEffect(() => {
+    if (!moveContaId || !paraContaId) {
+      setPreview(null)
+      return
+    }
+    let cancelled = false
+    setPreviewing(true)
+    onPreviewMove(moveContaId, paraContaId, incluirLancamentos, incluirOrcamentos)
+      .then(res => { if (!cancelled) setPreview(res) })
+      .finally(() => { if (!cancelled) setPreviewing(false) })
+    return () => { cancelled = true }
+  }, [moveContaId, paraContaId, incluirLancamentos, incluirOrcamentos, onPreviewMove])
 
   const salvar = async () => {
     if (!nome.trim()) return
@@ -52,10 +87,10 @@ export default function ContasModal({ contas, onClose, mesSelecionado, onAdd, on
 
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 backdrop-blur-sm px-4" onClick={onClose}>
-      <div className="bg-white rounded-3xl w-full max-w-sm shadow-xl p-5 space-y-4 max-h-[85vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+      <div className="bg-white dark:bg-[#342F2B] rounded-3xl w-full max-w-sm shadow-xl p-5 space-y-4 max-h-[85vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between">
-          <h2 className="font-bold text-[#2D2A26]">🏦 Contas</h2>
-          <button onClick={onClose} className="p-2 rounded-full hover:bg-[#FAF6F1] text-[#8C857C] transition"><X size={16}/></button>
+          <h2 className="font-bold text-[#2D2A26] dark:text-[#E8E0D5]">Contas</h2>
+          <button onClick={onClose} className="p-2 rounded-full hover:bg-[#FAF6F1] dark:hover:bg-[#3E3935] text-[#8C857C] transition"><X size={16}/></button>
         </div>
 
         {contas.length === 0 && !adding && (
@@ -63,12 +98,12 @@ export default function ContasModal({ contas, onClose, mesSelecionado, onAdd, on
         )}
 
         {contas.map(c => (
-          <div key={c.id} className="bg-[#FAF6F1] rounded-2xl p-3 space-y-2">
+          <div key={c.id} className="bg-[#FAF6F1] dark:bg-[#3E3935] rounded-2xl p-3 space-y-2">
             <div className="flex items-center gap-3">
               <span className="text-xl">{c.emoji}</span>
               <div className="flex-1 min-w-0">
-                <p className="font-semibold text-[#2D2A26] text-sm">{c.nome}</p>
-                <p className="text-xs text-[#8C857C]">Saldo inicial: {fmt(parsearValor(c.saldoInicial))}</p>
+                <p className="font-semibold text-[#2D2A26] dark:text-[#E8E0D5] text-sm">{c.nome}</p>
+                <p className="text-xs text-[#8C857C] dark:text-[#9E9890]">Saldo inicial: {fmt(parsearValor(c.saldoInicial))}</p>
               </div>
               <span className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: c.cor }}/>
               {c.isOwner && (
@@ -96,6 +131,126 @@ export default function ContasModal({ contas, onClose, mesSelecionado, onAdd, on
                   </div>
                 ))}
               </div>
+            )}
+
+            {/* Transferir para outra conta */}
+            {c.isOwner && contas.length > 1 && (
+              moveContaId === c.id ? (
+                <div className="space-y-2 pt-1 border-t border-[rgba(45,42,38,0.08)]">
+                  <p className="text-xs font-semibold text-[#2D2A26] dark:text-[#E8E0D5]">Transferir registros</p>
+                  <select
+                    value={paraContaId}
+                    onChange={e => { setParaContaId(e.target.value); setConfirmMove(false); setMoveMsg('') }}
+                    className="w-full rounded-xl border border-[rgba(45,42,38,0.12)] dark:border-[rgba(255,255,255,0.07)] bg-white dark:bg-[#3E3935] px-3 py-2 text-sm text-[#2D2A26] dark:text-[#E8E0D5] outline-none focus:ring-2 focus:ring-[#8FB39A]/50"
+                  >
+                    <option value="">Selecionar conta destino</option>
+                    {contas.filter(d => d.id !== c.id).map(d => (
+                      <option key={d.id} value={d.id}>{d.emoji} {d.nome}</option>
+                    ))}
+                  </select>
+                  <label className="flex items-center gap-2 text-xs text-[#2D2A26] dark:text-[#E8E0D5]">
+                    <input
+                      type="checkbox"
+                      checked={incluirLancamentos}
+                      onChange={e => { setIncluirLancamentos(e.target.checked); setConfirmMove(false) }}
+                      className="w-4 h-4 accent-[#8FB39A]"
+                    />
+                    Incluir lançamentos avulsos
+                  </label>
+                  <label className="flex items-center gap-2 text-xs text-[#2D2A26] dark:text-[#E8E0D5]">
+                    <input
+                      type="checkbox"
+                      checked={incluirOrcamentos}
+                      onChange={e => { setIncluirOrcamentos(e.target.checked); setConfirmMove(false) }}
+                      className="w-4 h-4 accent-[#8FB39A]"
+                    />
+                    Incluir orçamentos
+                  </label>
+                  {previewing && <p className="text-[10px] text-[#8C857C]">Contando registros...</p>}
+                  {preview && paraContaId && (
+                    <p className="text-[11px] text-[#8C857C] dark:text-[#9E9890] leading-relaxed">
+                      {preview.fixas} fixa{preview.fixas === 1 ? '' : 's'}
+                      {incluirLancamentos ? ` · ${preview.lancamentos} lançamento${preview.lancamentos === 1 ? '' : 's'}` : ''}
+                      {incluirOrcamentos ? ` · ${preview.orcamentos} orçamento${preview.orcamentos === 1 ? '' : 's'}` : ''}
+                      {preview.orcamentosIgnorados > 0 ? ` (${preview.orcamentosIgnorados} já existiam no destino)` : ''}
+                    </p>
+                  )}
+                  {moveMsg && (
+                    <div className="flex items-center gap-2 text-xs text-[#8FB39A] bg-[#8FB39A]/10 rounded-xl px-3 py-2">
+                      <CheckCircle size={12}/> {moveMsg}
+                    </div>
+                  )}
+                  {confirmMove ? (
+                    <div className="flex gap-2">
+                      <button
+                        disabled={moving || !paraContaId}
+                        onClick={async () => {
+                          if (!paraContaId) return
+                          setMoving(true)
+                          const res = await onMove(c.id, paraContaId, incluirLancamentos, incluirOrcamentos)
+                          setMoving(false)
+                          if (res?.ok) {
+                            setMoveMsg(`Transferidos: ${res.fixas} fixas, ${res.lancamentos} lançamentos, ${res.orcamentos} orçamentos.`)
+                            setConfirmMove(false)
+                            setPreview(res)
+                          } else {
+                            setMoveMsg('Não foi possível transferir.')
+                          }
+                        }}
+                        className="flex-1 rounded-xl bg-[#8FB39A] text-white text-xs font-semibold py-2 disabled:opacity-60 hover:bg-[#7ea389] transition active:scale-95"
+                      >
+                        {moving ? <Loader2 size={13} className="animate-spin mx-auto"/> : 'Confirmar transferência'}
+                      </button>
+                      <button
+                        onClick={() => setConfirmMove(false)}
+                        className="px-3 rounded-xl border border-[rgba(45,42,38,0.12)] dark:border-[rgba(255,255,255,0.07)] text-[#8C857C] text-xs font-semibold hover:bg-[#FAF6F1] dark:hover:bg-[#3E3935] transition"
+                      >
+                        Voltar
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex gap-2">
+                      <button
+                        disabled={!paraContaId || previewing}
+                        onClick={() => setConfirmMove(true)}
+                        className="flex-1 rounded-xl bg-[#8FB39A] text-white text-xs font-semibold py-2 disabled:opacity-60 hover:bg-[#7ea389] transition active:scale-95"
+                      >
+                        Transferir
+                      </button>
+                      <button
+                        onClick={() => {
+                          setMoveContaId(null)
+                          setParaContaId('')
+                          setPreview(null)
+                          setMoveMsg('')
+                          setConfirmMove(false)
+                          setIncluirLancamentos(true)
+                          setIncluirOrcamentos(false)
+                        }}
+                        className="px-3 rounded-xl border border-[rgba(45,42,38,0.12)] dark:border-[rgba(255,255,255,0.07)] text-[#8C857C] hover:bg-[#FAF6F1] dark:hover:bg-[#3E3935] transition"
+                      >
+                        <X size={13}/>
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <button
+                  onClick={() => {
+                    setMoveContaId(c.id)
+                    setParaContaId('')
+                    setPreview(null)
+                    setMoveMsg('')
+                    setConfirmMove(false)
+                    setIncluirLancamentos(true)
+                    setIncluirOrcamentos(false)
+                    setInviteContaId(null)
+                  }}
+                  className="w-full flex items-center justify-center gap-1.5 text-xs text-[#8C857C] hover:text-[#8FB39A] py-1 transition"
+                >
+                  <ArrowRightLeft size={12}/> Transferir para outra conta
+                </button>
+              )
             )}
 
             {/* Botão convidar */}
