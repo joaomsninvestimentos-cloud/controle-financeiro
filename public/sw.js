@@ -1,5 +1,5 @@
-const CACHE_NAME = 'financas-v2';
-const STATIC_ASSETS = ['/manifest.json', '/icon-192.png', '/icon-512.png'];
+const CACHE_NAME = 'financas-v3';
+const STATIC_ASSETS = ['/manifest.json', '/icon-192.png', '/icon-512.png', '/favicon.ico'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(

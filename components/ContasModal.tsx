@@ -52,7 +52,7 @@ export default function ContasModal({ contas, onClose, mesSelecionado, onAdd, on
 
   return (
     <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/40 backdrop-blur-sm px-4" onClick={onClose}>
-      <div className="bg-white rounded-3xl w-full max-w-sm shadow-xl p-5 space-y-4 max-h-[85vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+      <div className="bg-white rounded-3xl w-full max-w-sm shadow-xl p-5 pb-[calc(1.25rem+env(safe-area-inset-bottom))] space-y-4 max-h-[85dvh] overflow-y-auto" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between">
           <h2 className="font-bold text-[#2D2A26]">🏦 Contas</h2>
           <button onClick={onClose} className="p-2 rounded-full hover:bg-[#FAF6F1] text-[#8C857C] transition"><X size={16}/></button>
