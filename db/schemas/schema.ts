@@ -31,6 +31,8 @@ export const contas = pgTable('contas', {
   saldoInicial: text('saldo_inicial').notNull().default('0'),
   saldoInicialMes: text('saldo_inicial_mes').notNull().default(''),
   ativa: boolean('ativa').notNull().default(true),
+  // 'pessoal' (só o dono vê) | 'casa' (compartilhada)
+  tipo: text('tipo').notNull().default('pessoal'),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 })
 
@@ -41,12 +43,15 @@ export const contaMembers = pgTable('conta_members', {
   contaId: text('conta_id')
     .notNull()
     .references(() => contas.id, { onDelete: 'cascade' }),
+  // nullable: convite para quem ainda não tem conta no app
   userId: text('user_id')
-    .notNull()
     .references(() => users.id, { onDelete: 'cascade' }),
   role: text('role').notNull().default('member'), // 'owner' | 'member'
   inviteEmail: text('invite_email'),               // email convidado (antes de aceitar)
   inviteToken: text('invite_token'),               // token do convite
+  inviteRole: text('invite_role'),                 // 'member' (padrão)
+  inviteExpiresAt: timestamp('invite_expires_at'), // validade do convite
+  inviteUsedAt: timestamp('invite_used_at'),       // quando foi aceito
   status: text('status').notNull().default('pending'), // 'pending' | 'active'
   createdAt: timestamp('created_at').notNull().defaultNow(),
 })

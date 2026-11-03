@@ -1,12 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/db'
-import { contas, contaMembers, users } from '@/db/schemas/schema'
-import { eq, and } from 'drizzle-orm'
+import { contaMembers, contas } from '@/db/schemas/schema'
+import { and, eq } from 'drizzle-orm'
 import { getAuthContext } from '@/lib/auth'
+import { criarConvite } from '@/lib/contas-db'
+import { DIAS_VALIDADE_CONVITE, linkConvite, linkWhatsApp } from '@/lib/contas-logic'
 import { z } from 'zod'
 
-// POST /api/contas/[id]/invite  — convidar por email
-const inviteSchema = z.object({ email: z.string().email() })
+/**
+ * POST /api/contas/[id]/invite
+ * Gera um convite por link/código. O e-mail é OPCIONAL: o link funciona mesmo
+ * para quem ainda não tem conta (o aceite fica em /convite/[token]).
+ */
+const inviteSchema = z.object({
+  email: z.string().email().optional().nullable(),
+})
 
 export async function POST(
   req: NextRequest,
@@ -17,50 +25,38 @@ export async function POST(
 
   const { id: contaId } = await params
 
-  // Apenas dono pode convidar
-  const [conta] = await db.select().from(contas).where(and(eq(contas.id, contaId), eq(contas.userId, ctx.user.id)))
-  if (!conta) return NextResponse.json({ error: 'FORBIDDEN' }, { status: 403 })
-
-  const body = await req.json()
-  const parsed = inviteSchema.safeParse(body)
+  const body = await req.json().catch(() => ({}))
+  const parsed = inviteSchema.safeParse(body ?? {})
   if (!parsed.success) return NextResponse.json({ error: 'INVALID_INPUT' }, { status: 400 })
 
-  const email = parsed.data.email.toLowerCase()
+  const convite = await criarConvite(contaId, ctx.user.id, { email: parsed.data.email ?? null })
+  // null = conta não existe ou não é do usuário
+  if (!convite) return NextResponse.json({ error: 'FORBIDDEN' }, { status: 403 })
 
-  // Verificar se já existe convite/membro para este email
-  const existing = await db
-    .select()
-    .from(contaMembers)
-    .where(and(eq(contaMembers.contaId, contaId), eq(contaMembers.inviteEmail, email)))
-  if (existing.length > 0) return NextResponse.json({ error: 'ALREADY_INVITED' }, { status: 409 })
+  const origem = req.nextUrl.origin
+  const link = linkConvite(origem, convite.token)
 
-  // Verificar se o usuário já existe
-  const [targetUser] = await db.select().from(users).where(eq(users.email, email))
-
-  const token = crypto.randomUUID()
-  const memberId = crypto.randomUUID()
-
-  await db.insert(contaMembers).values({
-    id: memberId,
-    contaId,
-    userId: targetUser?.id ?? null,
-    role: 'member',
-    inviteEmail: email,
-    inviteToken: token,
-    status: targetUser ? 'active' : 'pending', // se já tem conta, ativa direto
-  })
+  if (convite.jaMembro) {
+    return NextResponse.json({
+      ok: true,
+      jaMembro: true,
+      message: 'Essa pessoa já participa desta conta.',
+    })
+  }
 
   return NextResponse.json({
     ok: true,
-    token,
-    userExists: !!targetUser,
-    message: targetUser
-      ? `${targetUser.name} foi adicionado à conta "${conta.nome}".`
-      : `Convite gerado. Quando ${email} criar uma conta no app, o acesso será liberado automaticamente.`,
+    token: convite.token,
+    link,
+    whatsapp: linkWhatsApp(link, convite.nomeConta, ctx.user.name),
+    expiraEm: convite.expiraEm.toISOString(),
+    diasValidade: DIAS_VALIDADE_CONVITE,
+    email: convite.email,
+    message: 'Convite criado. Copie o link ou envie no WhatsApp (vale 7 dias).',
   }, { status: 201 })
 }
 
-// DELETE /api/contas/[id]/invite  — remover membro
+// DELETE /api/contas/[id]/invite?memberId=... — remover membro/convite
 export async function DELETE(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -73,10 +69,15 @@ export async function DELETE(
   const memberId = searchParams.get('memberId')
   if (!memberId) return NextResponse.json({ error: 'MISSING_MEMBER_ID' }, { status: 400 })
 
-  // Apenas dono pode remover
-  const [conta] = await db.select().from(contas).where(and(eq(contas.id, contaId), eq(contas.userId, ctx.user.id)))
+  const [conta] = await db
+    .select()
+    .from(contas)
+    .where(and(eq(contas.id, contaId), eq(contas.userId, ctx.user.id)))
   if (!conta) return NextResponse.json({ error: 'FORBIDDEN' }, { status: 403 })
 
-  await db.delete(contaMembers).where(and(eq(contaMembers.id, memberId), eq(contaMembers.contaId, contaId)))
+  await db
+    .delete(contaMembers)
+    .where(and(eq(contaMembers.id, memberId), eq(contaMembers.contaId, contaId)))
+
   return NextResponse.json({ ok: true })
 }

@@ -4,6 +4,7 @@ import { users } from '@/db/schemas/schema'
 import { eq } from 'drizzle-orm'
 import { hashPassword } from '@/lib/password'
 import { createSessionToken, COOKIE_NAME, MAX_AGE } from '@/lib/session'
+import { garantirContaPessoal } from '@/lib/contas-db'
 import { z } from 'zod'
 
 const schema = z.object({
@@ -41,6 +42,11 @@ export async function POST(req: NextRequest) {
       status: 'active',
       createdAt: now,
       updatedAt: now,
+    })
+
+    // Cada usuário nasce com a sua conta pessoal (privada).
+    await garantirContaPessoal(id, name.trim()).catch(err => {
+      console.error('falha ao criar conta pessoal', err)
     })
 
     const token = await createSessionToken(id)

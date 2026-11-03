@@ -1,7 +1,7 @@
 'use client'
 
 import { useMemo, useRef, useState } from 'react'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { Wallet, Eye, EyeOff, Loader2, Check, X, ShieldCheck } from 'lucide-react'
 import {
   SENHA_MINIMA,
@@ -16,6 +16,10 @@ type Mode = 'login' | 'register'
 
 export default function LoginPage() {
   const router = useRouter()
+  const searchParams = useSearchParams()
+  // permite voltar para onde a pessoa estava (ex.: /convite/<token>)
+  const voltarPara = searchParams.get('voltar')
+  const destino = voltarPara && voltarPara.startsWith('/') && !voltarPara.startsWith('//') ? voltarPara : '/'
   const [mode, setMode] = useState<Mode>('login')
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
@@ -73,7 +77,7 @@ export default function LoginPage() {
       })
 
       if (res.ok) {
-        router.push('/')
+        router.push(destino)
         router.refresh()
         return
       }

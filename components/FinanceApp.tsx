@@ -12,6 +12,8 @@ import {
 import GraficosView from './GraficosView'
 import ContasModal from './ContasModal'
 import RecorrenciasModal from './RecorrenciasModal'
+import ContaSwitcher from './ContaSwitcher'
+import { resolverSelecao } from '@/lib/contas-logic'
 import OrcamentosView from './OrcamentosView'
 import ChatAssistant from './ChatAssistant'
 import { useTheme } from './ThemeProvider'
@@ -53,11 +55,13 @@ export interface Membro {
   status: string
   userName: string | null
   userEmail: string | null
+  conviteExpiraEmDias?: number
 }
 
 export interface Conta {
   id: string
   nome: string
+  tipo?: 'pessoal' | 'casa'
   cor: string
   emoji: string
   saldoInicial: string
@@ -185,7 +189,7 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
   const [todosItems, setTodosItems] = useState<Item[]>([])
   const [contas, setContas] = useState<Conta[]>([])
   const [orcamentos, setOrcamentos] = useState<Orcamento[]>([])
-  const [contaSelecionada, setContaSelecionada] = useState<string | 'todas'>('todas')
+  const [contaSelecionada, setContaSelecionada] = useState<string | 'tudo'>('tudo')
   const [loading, setLoading] = useState(true)
   const [descricao, setDescricao] = useState('')
   const [valorTexto, setValorTexto] = useState('')
@@ -232,14 +236,40 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
   }, [])
 
   useEffect(() => {
-    if (contaSelecionada !== 'todas') setItemContaId(contaSelecionada)
+    if (contaSelecionada !== 'tudo') setItemContaId(contaSelecionada)
   }, [contaSelecionada])
 
   // Carregar contas
   const carregarContas = useCallback(() => {
-    fetch('/api/contas').then(r => r.json()).then(d => setContas(d.contas ?? [])).catch(() => {})
+    fetch('/api/contas')
+      .then(r => r.json())
+      .then((d: { contas?: Conta[] }) => {
+        const lista = d.contas ?? []
+        setContas(lista)
+        // Restaura a última conta usada no aparelho
+        if (lista.length > 0) {
+          const salva = typeof window !== 'undefined' ? localStorage.getItem('conta-selecionada') : null
+          setContaSelecionada(prev => {
+            if (prev !== 'tudo') return prev
+            const resumo = lista.map(c => ({
+              id: c.id,
+              nome: c.nome,
+              tipo: (c.tipo ?? 'pessoal') as 'pessoal' | 'casa',
+              isOwner: c.isOwner,
+            }))
+            return resolverSelecao(resumo, salva)
+          })
+        }
+      })
+      .catch(() => {})
   }, [])
   useEffect(() => { carregarContas() }, [carregarContas])
+
+  // Guarda a conta escolhida para abrir nela da próxima vez
+  const selecionarConta = useCallback((valor: string | 'tudo') => {
+    setContaSelecionada(valor)
+    try { localStorage.setItem('conta-selecionada', valor) } catch { /* modo privado */ }
+  }, [])
 
   // Carregar orçamentos do mês
   useEffect(() => {
@@ -251,7 +281,7 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
 
   // Carregar TODOS os items (carry-forward)
   const carregarTodosItems = useCallback(() => {
-    const params = contaSelecionada !== 'todas'
+    const params = contaSelecionada !== 'tudo'
       ? `?contaId=${contaSelecionada}&todos=1`
       : `?todos=1`
     fetch(`/api/items${params}`)
@@ -266,7 +296,7 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
   useEffect(() => {
     setLoading(true)
     const params = new URLSearchParams({ mes: mesSelecionado })
-    if (contaSelecionada !== 'todas') params.set('contaId', contaSelecionada)
+    if (contaSelecionada !== 'tudo') params.set('contaId', contaSelecionada)
     fetch(`/api/items?${params}`)
       .then(r => r.json())
       .then(d => { setItems(d.items ?? []); setLoading(false) })
@@ -290,7 +320,7 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
   let saldo = totalReceitas - totalDespesas
   let saldoInicio = 0
 
-  if (contaSelecionada !== 'todas' && contas.length > 0) {
+  if (contaSelecionada !== 'tudo' && contas.length > 0) {
     const conta = contas.find(c => c.id === contaSelecionada)
     if (conta) {
       const itensConta = todosItems.filter(i => i.contaId === conta.id)
@@ -325,7 +355,7 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
       })
       if (res.ok) {
         const { item, geradas } = await res.json() as { item: Item; geradas?: number }
-        if (item.mes === mesSelecionado && (contaSelecionada === 'todas' || item.contaId === contaSelecionada)) {
+        if (item.mes === mesSelecionado && (contaSelecionada === 'tudo' || item.contaId === contaSelecionada)) {
           setItems(prev => [item, ...prev])
         }
         setTodosItems(prev => [item, ...prev])
@@ -583,33 +613,18 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
           </button>
         </div>
 
-        {/* Seletor de conta */}
+        {/* Barra fixa de contas: pessoal, casa e tudo */}
         {contas.length > 0 && (
-          <div className="flex gap-2 overflow-x-auto pb-1 no-scrollbar">
-            <button
-              onClick={() => setContaSelecionada('todas')}
-              className={`shrink-0 rounded-full px-4 py-2 text-xs font-semibold transition-all active:scale-95 ${contaSelecionada === 'todas' ? 'bg-[#2D2A26] text-white shadow-snug' : 'bg-white dark:bg-[#342F2B] text-[#8C857C] border border-[rgba(45,42,38,0.12)] dark:border-[rgba(255,255,255,0.07)] shadow-snug'}`}
-            >
-              🏦 Todas
-            </button>
-            {contas.map(c => (
-              <button
-                key={c.id}
-                onClick={() => setContaSelecionada(c.id)}
-                className={`shrink-0 rounded-full px-4 py-2 text-xs font-semibold transition-all active:scale-95 flex items-center gap-1 ${contaSelecionada === c.id ? 'text-white shadow-snug' : 'bg-white dark:bg-[#342F2B] text-[#8C857C] border border-[rgba(45,42,38,0.12)] dark:border-[rgba(255,255,255,0.07)] shadow-snug'}`}
-                style={contaSelecionada === c.id ? { backgroundColor: c.cor } : {}}
-              >
-                {c.emoji} {c.nome}
-                {c.membros.some(m => m.status === 'active') && (
-                  <Users size={10} className="opacity-70" />
-                )}
-              </button>
-            ))}
-          </div>
+          <ContaSwitcher
+            contas={contas}
+            selecionada={contaSelecionada}
+            onSelecionar={selecionarConta}
+            onGerenciar={() => setShowContas(true)}
+          />
         )}
 
         {/* Saldo da conta com carry-forward */}
-        {contaSelecionada !== 'todas' && (() => {
+        {contaSelecionada !== 'tudo' && (() => {
           const conta = contas.find(c => c.id === contaSelecionada)
           if (!conta) return null
           const itensConta = todosItems.filter(i => i.contaId === conta.id)
@@ -670,7 +685,7 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
           <SummaryCard label="Receitas" valor={totalReceitas} cor="text-[#8FB39A]" bg="bg-[#8FB39A]/10" icon={<TrendingUp size={15} className="text-[#8FB39A]" />} />
           <SummaryCard label="Despesas" valor={totalDespesas} cor="text-[#D4A0A0]" bg="bg-[#D4A0A0]/10" icon={<TrendingDown size={15} className="text-[#D4A0A0]" />} />
           <SummaryCard
-            label={contaSelecionada !== 'todas' ? 'Saldo Final' : 'Saldo'}
+            label={contaSelecionada !== 'tudo' ? 'Saldo Final' : 'Saldo'}
             valor={saldo}
             cor={saldo>=0?'text-[#8FB39A]':'text-[#D4A0A0]'}
             bg={saldo>=0?'bg-[#8FB39A]/10':'bg-[#D4A0A0]/10'}
@@ -920,7 +935,7 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
           contas={contas}
           onClose={() => setShowFixas(false)}
           onChanged={() => {
-            if (contaSelecionada !== 'todas') {
+            if (contaSelecionada !== 'tudo') {
               const params = new URLSearchParams({ mes: mesSelecionado, contaId: contaSelecionada })
               fetch(`/api/items?${params}`).then(r => r.json()).then(d => setItems(d.items ?? [])).catch(() => {})
             } else {
@@ -942,21 +957,34 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
               method: 'POST', headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify(nova),
             })
-            if (res.ok) { const { conta } = await res.json(); setContas(prev => [...prev, conta]) }
+            if (res.ok) { carregarContas(); mostrarAviso('Conta criada.') }
+            else mostrarErro('Não foi possível criar a conta.')
           }}
           onDelete={async (id) => {
             const res = await fetch(`/api/contas/${id}`, { method: 'DELETE' })
-            if (res.ok) { setContas(prev => prev.filter(c => c.id !== id)); if (contaSelecionada === id) setContaSelecionada('todas') }
+            if (res.ok) { setContas(prev => prev.filter(c => c.id !== id)); if (contaSelecionada === id) setContaSelecionada('tudo') }
           }}
-          onInvite={async (contaId, email) => {
+          onGerarConvite={async (contaId, email) => {
             const res = await fetch(`/api/contas/${contaId}/invite`, {
               method: 'POST', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ email }),
+              body: JSON.stringify(email ? { email } : {}),
             })
-            const data = await res.json()
-            if (res.ok) { carregarContas(); return data.message }
-            if (data.error === 'ALREADY_INVITED') return 'Este email já foi convidado.'
-            return 'Erro ao convidar.'
+            const data = await res.json().catch(() => ({})) as {
+              link?: string; whatsapp?: string; message?: string; diasValidade?: number
+              jaMembro?: boolean; error?: string
+            }
+            carregarContas()
+            if (!res.ok) {
+              return { erro: data.error === 'FORBIDDEN' ? 'Você não é o dono desta conta.' : 'Não foi possível gerar o convite.' }
+            }
+            if (data.jaMembro) return { erro: 'Essa pessoa já participa desta conta.' }
+            if (!data.link) return { erro: 'O servidor não devolveu o link. Tente de novo.' }
+            return {
+              link: data.link,
+              whatsapp: data.whatsapp ?? `https://wa.me/?text=${encodeURIComponent(data.link)}`,
+              message: data.message ?? 'Convite criado.',
+              diasValidade: data.diasValidade,
+            }
           }}
           onRemoveMembro={async (contaId, memberId) => {
             await fetch(`/api/contas/${contaId}/invite?memberId=${memberId}`, { method: 'DELETE' })
@@ -1002,7 +1030,7 @@ interface ItemCardProps {
   item: Item
   contas: Conta[]
   currentUser: AuthUser
-  contaSelecionada: string | 'todas'
+  contaSelecionada: string | 'tudo'
   onRemover: (id: string) => void
   onEditar: (id: string, c: Partial<Pick<Item,'descricao'|'valor'|'categoria'|'data'|'contaId'|'recorrente'>>) => Promise<void>
 }
