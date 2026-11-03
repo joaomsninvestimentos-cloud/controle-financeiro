@@ -2,7 +2,7 @@
 
 import { Home, Layers, Pencil, Plus, User } from 'lucide-react'
 import type { Conta } from './FinanceApp'
-import { ROTULO_SOMA } from '@/lib/contas-logic'
+import { mostrarSoma, normalizarRotuloSoma } from '@/lib/contas-logic'
 
 interface Props {
   contas: Conta[]
@@ -10,13 +10,20 @@ interface Props {
   onSelecionar: (valor: string | 'tudo') => void
   onGerenciar: () => void
   onEditar: (conta: Conta) => void
+  /** Nome dado pelo usuário à visão somada (não é conta). */
+  rotuloSoma: string
+  /** Se falso, a visão somada só aparece quando está ativa. */
+  somaVisivel: boolean
 }
 
 /**
  * Barra de troca de conta. "Somar tudo" fica visualmente separado (não é conta,
  * é a soma), e a conta selecionada ganha um lápis para renomear/excluir.
  */
-export default function ContaSwitcher({ contas, selecionada, onSelecionar, onGerenciar, onEditar }: Props) {
+export default function ContaSwitcher({
+  contas, selecionada, onSelecionar, onGerenciar, onEditar, rotuloSoma, somaVisivel,
+}: Props) {
+  const nomeSoma = normalizarRotuloSoma(rotuloSoma)
   const pessoais = contas.filter(c => (c.tipo ?? 'pessoal') === 'pessoal')
   const casas = contas.filter(c => c.tipo === 'casa')
 
@@ -77,8 +84,10 @@ export default function ContaSwitcher({ contas, selecionada, onSelecionar, onGer
           })}
 
           {/* Não é conta: é a soma de todas. Separado por uma linha. */}
-          {contas.length > 1 && <span className="shrink-0 w-px h-5 bg-[rgba(45,42,38,0.12)] dark:bg-[rgba(255,255,255,0.12)] mx-0.5" />}
-          {contas.length > 1 && (
+          {contas.length > 1 && mostrarSoma(somaVisivel, selecionada) && (
+            <span className="shrink-0 w-px h-5 bg-[rgba(45,42,38,0.12)] dark:bg-[rgba(255,255,255,0.12)] mx-0.5" />
+          )}
+          {contas.length > 1 && mostrarSoma(somaVisivel, selecionada) && (
             <button
               onClick={() => onSelecionar('tudo')}
               aria-pressed={selecionada === 'tudo'}
@@ -89,7 +98,7 @@ export default function ContaSwitcher({ contas, selecionada, onSelecionar, onGer
                   : 'bg-transparent dark:bg-transparent text-[#8C857C] dark:text-[#9E9890] border border-[rgba(45,42,38,0.18)] dark:border-[rgba(255,255,255,0.18)]'
               }`}
             >
-              <Layers size={11} className="opacity-80" /> {ROTULO_SOMA}
+              <Layers size={11} className="opacity-80" /> {nomeSoma}
             </button>
           )}
         </div>
