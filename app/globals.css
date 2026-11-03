@@ -147,3 +147,136 @@
 nextjs-portal {
   display: none !important;
 }
+
+/* ─── Compatibilidade iPhone / iPad (iOS) e Windows ───────────────────────── */
+@layer base {
+  html {
+    /* Evita o Safari inflar a fonte ao girar o aparelho */
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+    /* Evita o "puxão" elástico que mostra o fundo branco no iOS */
+    overscroll-behavior-y: none;
+  }
+
+  body {
+    /* Barra de rolagem estável ao abrir teclado/modal */
+    scrollbar-gutter: stable;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* iPhone com notch: nada fica embaixo da barra de gestos ou do recorte
+     lateral (paisagem). Em navegador comum env() vale 0, então não muda nada. */
+  @supports (padding: env(safe-area-inset-bottom)) {
+    body {
+      padding-bottom: env(safe-area-inset-bottom);
+      padding-left: env(safe-area-inset-left);
+      padding-right: env(safe-area-inset-right);
+    }
+  }
+
+  /* Toque sem atraso de 300ms e sem flash cinza no iOS/Android */
+  button,
+  a,
+  label,
+  [role='button'] {
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* Foco visível apenas para teclado (Windows/desktop) */
+  :focus-visible {
+    outline: 2px solid #8FB39A;
+    outline-offset: 2px;
+  }
+
+  /* Rolagem discreta no Windows (Chrome/Edge) */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(140, 133, 124, 0.45) transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  *::-webkit-scrollbar-thumb {
+    background-color: rgba(140, 133, 124, 0.45);
+    border-radius: 9999px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
+
+/* iOS dá zoom automático em campos com fonte < 16px.
+   O seletor por atributo vence as classes .text-sm do Tailwind. */
+@supports (-webkit-touch-callout: none) {
+  input[type],
+  select,
+  textarea {
+    font-size: 16px;
+    line-height: 1.35;
+  }
+
+  /* iOS desenha os campos de data/mês fora do padrão: normaliza a aparência */
+  input[type='date'],
+  input[type='month'],
+  input[type='time'] {
+    -webkit-appearance: none;
+    appearance: none;
+    min-height: 44px;
+    background-color: transparent;
+    text-align: left;
+  }
+  input[type='date']::-webkit-date-and-time-value,
+  input[type='month']::-webkit-date-and-time-value {
+    text-align: left;
+  }
+
+  /* Evita que o Safari selecione o texto dos rótulos ao tocar rápido */
+  label {
+    -webkit-user-select: none;
+    user-select: none;
+  }
+}
+
+/* Alvos de toque confortáveis (Apple HIG: 44px) nos controles principais */
+@supports (-webkit-touch-callout: none) {
+  button:not([aria-label='Editar']):not([aria-label='Remover']) {
+    min-height: 32px;
+  }
+}
+
+/* Windows/desktop: hover só onde existe mouse de verdade */
+@media (hover: hover) and (pointer: fine) {
+  .hover-lift:hover {
+    transform: translateY(-1px);
+  }
+}
+
+/* Telas altas e estreitas (iPhone): usa a altura real da janela */
+@supports (height: 100dvh) {
+  .h-screen-safe {
+    min-height: 100dvh;
+  }
+}
+
+/* Respeita "reduzir movimento" (iOS Acessibilidade / Windows) */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Impressão (Windows: Ctrl+P do app) */
+@media print {
+  .no-print {
+    display: none !important;
+  }
+}

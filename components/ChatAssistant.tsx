@@ -158,7 +158,7 @@ export default function ChatAssistant({ mesSelecionado }: Props) {
     <>
       <button
         onClick={() => setAberto(v => !v)}
-        className={`fixed bottom-6 right-5 z-40 w-14 h-14 rounded-full shadow-lg flex items-center justify-center transition-all active:scale-90
+        className={`fixed bottom-[calc(1.5rem+env(safe-area-inset-bottom))] right-5 z-40 w-14 h-14 rounded-full shadow-lg flex items-center justify-center transition-all active:scale-90
           ${aberto ? 'bg-[#2D2A26] dark:bg-[#E8E0D5] rotate-0' : 'bg-[#8FB39A] hover:bg-[#7ea389]'}
           ${pulse ? 'ring-4 ring-[#8FB39A]/40 ring-offset-2 animate-pulse' : ''}
         `}
@@ -176,8 +176,8 @@ export default function ChatAssistant({ mesSelecionado }: Props) {
 
       {aberto && (
         <div
-          className="fixed bottom-24 right-4 z-40 w-[min(92vw,380px)] bg-white dark:bg-[#342F2B] rounded-3xl shadow-2xl flex flex-col overflow-hidden border border-[rgba(45,42,38,0.08)] dark:border-[rgba(255,255,255,0.08)]"
-          style={{ maxHeight: 'min(75vh, 560px)' }}
+          className="fixed bottom-[calc(6rem+env(safe-area-inset-bottom))] right-4 z-40 w-[min(92vw,380px)] bg-white dark:bg-[#342F2B] rounded-3xl shadow-2xl flex flex-col overflow-hidden border border-[rgba(45,42,38,0.08)] dark:border-[rgba(255,255,255,0.08)]"
+          style={{ maxHeight: 'min(75dvh, 560px)' }}
         >
           <div className="bg-gradient-to-r from-[#8FB39A] to-[#7ea389] px-4 py-3 flex items-center gap-3">
             <div className="w-9 h-9 rounded-full bg-white/20 flex items-center justify-center shrink-0">

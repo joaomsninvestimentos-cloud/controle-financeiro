@@ -207,7 +207,6 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
   const [busca, setBusca] = useState('')
   const [erro, setErro] = useState('')
   const [installPrompt, setInstallPrompt] = useState<{ prompt: () => Promise<void> } | null>(null)
-  const swRef = useRef(false)
   const erroTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const mostrarErro = useCallback((msg: string) => {
@@ -222,12 +221,8 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
     avisoTimer.current = setTimeout(() => setAviso(''), 5000)
   }, [])
 
-  // PWA
+  // PWA (o service worker é registrado no layout, em PwaBoot)
   useEffect(() => {
-    if (!swRef.current && 'serviceWorker' in navigator) {
-      swRef.current = true
-      navigator.serviceWorker.register('/sw.js').catch(() => {})
-    }
     const onInstall = (e: Event) => {
       e.preventDefault()
       setInstallPrompt(e as unknown as { prompt: () => Promise<void> })
@@ -521,7 +516,7 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
   return (
     <div className="min-h-screen bg-[#FAF6F1] dark:bg-[#2B2825] font-nunito pb-10 transition-colors duration-300">
       {/* Header */}
-      <header className="bg-white dark:bg-[#342F2B] shadow-snug sticky top-0 z-10 px-4 py-3 flex items-center justify-between">
+      <header className="bg-white dark:bg-[#342F2B] shadow-snug sticky top-0 z-10 px-4 pt-[calc(0.75rem+env(safe-area-inset-top))] pb-3 flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Wallet className="text-[#8FB39A]" size={20} />
           <span className="text-[#2D2A26] dark:text-[#E8E0D5] font-bold text-sm">Meu Controle Financeiro</span>

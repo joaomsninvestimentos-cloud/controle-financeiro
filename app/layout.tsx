@@ -4,27 +4,60 @@ import { Analytics } from '@vercel/analytics/next';
 import { AgentationGuard } from '@/components/AgentationGuard';
 import { HappySeedsWatermark } from '@/components/HappySeedsWatermark';
 import { ThemeProvider } from '@/components/ThemeProvider';
+import { ServiceWorkerRegistrar } from '@/components/PwaBoot';
 import './globals.css';
 
+const APP_NAME = 'Meu Controle Financeiro';
+const APP_DESCRIPTION =
+  'Controle suas receitas e despesas em Reais, com despesas fixas, orçamentos por categoria, contas compartilhadas e gráficos.';
+
 export const metadata: Metadata = {
-  title: 'Meu Controle Financeiro',
-  description: 'Controle suas receitas e despesas em Reais com categorias, gráficos e salvamento automático.',
+  applicationName: APP_NAME,
+  title: APP_NAME,
+  description: APP_DESCRIPTION,
   manifest: '/manifest.json',
+  icons: {
+    icon: [
+      { url: '/icon-192.png', sizes: '192x192', type: 'image/png' },
+      { url: '/icon-512.png', sizes: '512x512', type: 'image/png' },
+    ],
+    // iOS usa este ícone na tela inicial (152/167/180 conforme o aparelho)
+    apple: [
+      { url: '/icon-192.png', sizes: '192x192', type: 'image/png' },
+      { url: '/icon-512.png', sizes: '512x512', type: 'image/png' },
+    ],
+  },
   appleWebApp: {
     capable: true,
-    statusBarStyle: 'default',
     title: 'Finanças',
+    statusBarStyle: 'default',
+  },
+  formatDetection: {
+    telephone: false,
+    email: false,
+    address: false,
   },
   other: {
     'mobile-web-app-capable': 'yes',
+    // Windows/Edge: evita que o app instalado abra dentro do navegador
+    'msapplication-TileColor': '#8FB39A',
+    'msapplication-tap-highlight': 'no',
   },
 };
 
 export const viewport: Viewport = {
-  themeColor: '#8FB39A',
+  // faixa verde clara no celular e combina com o tema escuro do app
+  themeColor: [
+    { media: '(prefers-color-scheme: light)', color: '#8FB39A' },
+    { media: '(prefers-color-scheme: dark)', color: '#2B2825' },
+  ],
+  colorScheme: 'light dark',
   width: 'device-width',
   initialScale: 1,
+  // permite desenhar atrás do notch/barra de gestos (usado com env(safe-area-*))
   viewportFit: 'cover',
+  // no Android, encolhe a viewport quando o teclado abre
+  interactiveWidget: 'resizes-content',
 };
 
 export default function RootLayout({
@@ -35,8 +68,6 @@ export default function RootLayout({
   return (
     <html lang="pt-BR">
       <head>
-        <meta name="theme-color" content="#8FB39A" />
-        <link rel="apple-touch-icon" href="/icon-192.png" />
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
         <link
@@ -55,6 +86,7 @@ export default function RootLayout({
         <ThemeProvider>
           {children}
         </ThemeProvider>
+        <ServiceWorkerRegistrar />
         <HappySeedsWatermark />
         <AgentationGuard />
         {process.env.NODE_ENV === 'production' && <Analytics />}
