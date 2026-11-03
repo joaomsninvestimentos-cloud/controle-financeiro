@@ -66,7 +66,7 @@ test('DDL é idempotente, cria tipo/validade e libera user_id nullable', async (
 
 test('dá para criar convite sem usuário (o caso que quebrava antes)', async () => {
   const db = await novoBanco()
-  await db.query(`INSERT INTO contas (id, user_id, nome, tipo) VALUES ('casa','u1','Casa','casa')`)
+  await db.query('INSERT INTO contas (id, user_id, nome, tipo) VALUES (\'casa\',\'u1\',\'Casa\',\'casa\')')
 
   // Sem DDL, user_id NOT NULL faria isto falhar; agora passa.
   await db.query(
@@ -74,14 +74,14 @@ test('dá para criar convite sem usuário (o caso que quebrava antes)', async ()
      VALUES ('m1','casa', NULL, 'member', NULL, 'tok123', now() + interval '7 days', 'pending')`,
   )
 
-  const r = await db.query<{ n: number }>(`SELECT count(*)::int AS n FROM conta_members WHERE invite_token = 'tok123'`)
+  const r = await db.query<{ n: number }>('SELECT count(*)::int AS n FROM conta_members WHERE invite_token = \'tok123\'')
   assert.equal(r.rows[0].n, 1)
   await db.close()
 })
 
 test('aceite do convite vincula o usuário e permite um único membro por conta', async () => {
   const db = await novoBanco()
-  await db.query(`INSERT INTO contas (id, user_id, nome, tipo) VALUES ('casa','u1','Casa','casa')`)
+  await db.query('INSERT INTO contas (id, user_id, nome, tipo) VALUES (\'casa\',\'u1\',\'Casa\',\'casa\')')
   await db.query(
     `INSERT INTO conta_members (id, conta_id, user_id, invite_token, invite_expires_at, status)
      VALUES ('m1','casa', NULL, 'tok123', now() + interval '7 days', 'pending')`,
@@ -89,10 +89,10 @@ test('aceite do convite vincula o usuário e permite um único membro por conta'
 
   // aceite
   await db.query(
-    `UPDATE conta_members SET user_id = 'u2', status = 'active', invite_used_at = now() WHERE invite_token = 'tok123'`,
+    'UPDATE conta_members SET user_id = \'u2\', status = \'active\', invite_used_at = now() WHERE invite_token = \'tok123\'',
   )
   const aceito = await db.query<{ user_id: string; status: string }>(
-    `SELECT user_id, status FROM conta_members WHERE invite_token = 'tok123'`,
+    'SELECT user_id, status FROM conta_members WHERE invite_token = \'tok123\'',
   )
   assert.equal(aceito.rows[0].user_id, 'u2')
   assert.equal(aceito.rows[0].status, 'active')
@@ -112,7 +112,7 @@ test('aceite do convite vincula o usuário e permite um único membro por conta'
      VALUES ('m3','casa',NULL,'tok999','pending')`,
   )
   const pendentes = await db.query<{ n: number }>(
-    `SELECT count(*)::int AS n FROM conta_members WHERE conta_id = 'casa'`,
+    'SELECT count(*)::int AS n FROM conta_members WHERE conta_id = \'casa\'',
   )
   assert.equal(pendentes.rows[0].n, 2)
   await db.close()
@@ -121,16 +121,16 @@ test('aceite do convite vincula o usuário e permite um único membro por conta'
 test('só uma conta pessoal por usuário (regra da aplicação + consulta)', async () => {
   const db = await novoBanco()
 
-  await db.query(`INSERT INTO contas (id, user_id, nome, tipo) VALUES ('p1','u1','João','pessoal')`)
+  await db.query('INSERT INTO contas (id, user_id, nome, tipo) VALUES (\'p1\',\'u1\',\'João\',\'pessoal\')')
 
   const existentes = await db.query<{ id: string }>(
-    `SELECT id FROM contas WHERE user_id = 'u1' AND tipo = 'pessoal' LIMIT 1`,
+    'SELECT id FROM contas WHERE user_id = \'u1\' AND tipo = \'pessoal\' LIMIT 1',
   )
   assert.equal(existentes.rows.length, 1, 'a segunda criação deve reaproveitar esta')
 
   // contas pessoais de pessoas diferentes não se misturam
-  await db.query(`INSERT INTO contas (id, user_id, nome, tipo) VALUES ('p2','u2','Maria','pessoal')`)
-  const joao = await db.query<{ id: string }>(`SELECT id FROM contas WHERE user_id = 'u1' AND tipo = 'pessoal'`)
+  await db.query('INSERT INTO contas (id, user_id, nome, tipo) VALUES (\'p2\',\'u2\',\'Maria\',\'pessoal\')')
+  const joao = await db.query<{ id: string }>('SELECT id FROM contas WHERE user_id = \'u1\' AND tipo = \'pessoal\'')
   assert.deepEqual(joao.rows.map(r => r.id), ['p1'])
   await db.close()
 })
@@ -144,7 +144,7 @@ test('visibilidade: pessoal do outro não aparece na lista do usuário', async (
       ('casa','u1','Casa','casa')
   `)
   await db.query(
-    `INSERT INTO conta_members (id, conta_id, user_id, role, status) VALUES ('m1','casa','u2','member','active')`,
+    'INSERT INTO conta_members (id, conta_id, user_id, role, status) VALUES (\'m1\',\'casa\',\'u2\',\'member\',\'active\')',
   )
 
   const visiveis = await db.query<{ id: string }>(
@@ -164,23 +164,23 @@ test('visibilidade: pessoal do outro não aparece na lista do usuário', async (
 test('backfill: usuário antigo sem conta recebe uma pessoal', async () => {
   const db = await novoBanco()
   // u1 e u2 existem, mas ninguém tem conta
-  const antes = await db.query<{ n: number }>(`SELECT count(*)::int AS n FROM contas`)
+  const antes = await db.query<{ n: number }>('SELECT count(*)::int AS n FROM contas')
   assert.equal(antes.rows[0].n, 0)
 
   for (const [id, nome] of [['u1', 'João'], ['u2', 'Maria']]) {
     const achou = await db.query(
-      `SELECT id FROM contas WHERE user_id = $1 AND tipo = 'pessoal' LIMIT 1`, [id],
+      'SELECT id FROM contas WHERE user_id = $1 AND tipo = \'pessoal\' LIMIT 1', [id],
     )
     if (achou.rows.length === 0) {
       await db.query(
-        `INSERT INTO contas (id, user_id, nome, tipo, emoji) VALUES ($1, $2, $3, 'pessoal', '👤')`,
+        'INSERT INTO contas (id, user_id, nome, tipo, emoji) VALUES ($1, $2, $3, \'pessoal\', \'👤\')',
         [`p-${id}`, id, nome],
       )
     }
   }
 
   const depois = await db.query<{ id: string; nome: string }>(
-    `SELECT id, nome FROM contas WHERE tipo = 'pessoal' ORDER BY id`,
+    'SELECT id, nome FROM contas WHERE tipo = \'pessoal\' ORDER BY id',
   )
   assert.equal(depois.rows.length, 2)
   assert.deepEqual(depois.rows.map(r => r.nome), ['João', 'Maria'])

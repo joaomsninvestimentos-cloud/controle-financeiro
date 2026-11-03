@@ -48,6 +48,23 @@ A general-purpose Next.js web application template with database initialization 
    - `pnpm db:migrate` — run migrations
    - `pnpm db:studio` — open Drizzle Studio
 
+## Contas separadas (pessoal / casa / tudo)
+
+- **Pessoal** (`contas.tipo = 'pessoal'`): criada automaticamente no cadastro
+  (e por backfill no primeiro acesso de quem já existia). Só o dono vê.
+- **Casa** (`tipo = 'casa'`): compartilhada. Os dois lançam e veem, com o autor
+  de cada lançamento (a API já bloqueia acesso a conta alheia com 403).
+- **Tudo**: soma de todas as contas acessíveis.
+- **Convite por link**: `POST /api/contas/[id]/invite` devolve `link` e
+  `whatsapp`, com validade de 7 dias (`lib/contas-logic.ts`). O aceite acontece
+  em `/convite/[token]` → `POST /api/convites/[token]`, e o login/cadastro
+  volta para o convite (`/login?voltar=/convite/<token>`).
+- A barra fixa de contas (`components/ContaSwitcher.tsx`) lembra a última
+  escolha no aparelho (`localStorage`).
+
+> A tabela `conta_members.user_id` é **nullable**: sem isso, o convite para
+> quem ainda não tinha conta violava NOT NULL e ficava pendente para sempre.
+
 ## Despesas fixas (recorrência automática)
 
 Ao lançar, marcar **“Despesa fixa (repete todo mês)”** cria uma *série*

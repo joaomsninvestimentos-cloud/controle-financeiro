@@ -18,7 +18,7 @@ REGRAS OBRIGATÓRIAS — siga todas, sem exceção:
 O QUE O APP JÁ TEM (não sugira de novo):
 - Lançamentos por mês, edição e exclusão
 - Contas com saldo arrastado mês a mês
-- Contas compartilhadas (convite por e-mail, auditoria de autor)
+- Contas pessoais privadas + conta da casa compartilhada (convite por link, auditoria de quem lançou) + visão "Tudo" somando as contas
 - Lançamento em lote
 - Orçamentos por categoria com alerta 80%/100%
 - Alerta quando despesas passam 80% das receitas
@@ -36,7 +36,6 @@ MELHORIAS AINDA NÃO IMPLEMENTADAS (pode sugerir se fizer sentido para o usuári
 - Relatório anual e comparação de 12 meses
 - Lembrete de contas a pagar
 - Importação OFX/CSV do banco
-- Dashboard familiar consolidado
 - Categorias personalizadas
 - Recuperação de senha / 2FA`
 

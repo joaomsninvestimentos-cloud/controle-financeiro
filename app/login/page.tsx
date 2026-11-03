@@ -1,6 +1,6 @@
 'use client'
 
-import { useMemo, useRef, useState } from 'react'
+import { Suspense, useMemo, useRef, useState } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { Wallet, Eye, EyeOff, Loader2, Check, X, ShieldCheck } from 'lucide-react'
 import {
@@ -14,7 +14,7 @@ import {
 
 type Mode = 'login' | 'register'
 
-export default function LoginPage() {
+function LoginForm() {
   const router = useRouter()
   const searchParams = useSearchParams()
   // permite voltar para onde a pessoa estava (ex.: /convite/<token>)
@@ -311,5 +311,20 @@ export default function LoginPage() {
         <ShieldCheck size={13} /> Seus dados são privados e protegidos.
       </p>
     </div>
+  )
+}
+
+export default function LoginPage() {
+  // useSearchParams precisa de Suspense para o prerender do build não quebrar
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-[100dvh] bg-[#FAF6F1] flex items-center justify-center">
+          <Loader2 size={20} className="animate-spin text-[#8FB39A]" />
+        </div>
+      }
+    >
+      <LoginForm />
+    </Suspense>
   )
 }
