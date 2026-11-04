@@ -1,10 +1,16 @@
 import 'server-only'
 
 import { db } from '@/db'
-import { items, recorrencias } from '@/db/schemas/schema'
-import { and, eq, inArray, isNull, sql } from 'drizzle-orm'
+import { items, recorrencias, contas, contaMembers } from '@/db/schemas/schema'
+import { and, eq, inArray, isNull, or, sql } from 'drizzle-orm'
 import { DDL_ESPELHO } from './espelho-ddl'
 import { apenasCamposSincronizados, montarEspelho } from './espelho-logic'
+import {
+  diagnosticarEspelhos,
+  type AcaoCorrecao,
+  type ContaRef,
+  type Diagnostico,
+} from './espelho-doctor-logic'
 
 type ItemRow = typeof items.$inferSelect
 
@@ -233,4 +239,132 @@ export async function garantirEspelhoDoItem(item: ItemRow, contaDestinoId: strin
   if (existente) return false
   const criado = await criarEspelhoDoItem(item, contaDestinoId)
   return !!criado
+}
+
+/* ───────────── Diagnóstico e conserto dos espelhos ───────────── */
+
+async function contasDoUsuario(userId: string): Promise<ContaRef[]> {
+  const proprias = await db
+    .select({ id: contas.id, nome: contas.nome, tipo: contas.tipo })
+    .from(contas)
+    .where(eq(contas.userId, userId))
+
+  const membros = await db
+    .select({ contaId: contaMembers.contaId })
+    .from(contaMembers)
+    .where(and(eq(contaMembers.userId, userId), eq(contaMembers.status, 'active')))
+
+  const compartilhadas = membros.length > 0
+    ? await db
+        .select({ id: contas.id, nome: contas.nome, tipo: contas.tipo })
+        .from(contas)
+        .where(inArray(contas.id, membros.map(m => m.contaId)))
+    : []
+
+  const mapa = new Map<string, ContaRef>()
+  for (const c of [...proprias, ...compartilhadas]) {
+    mapa.set(c.id, { id: c.id, nome: c.nome, tipo: c.tipo === 'casa' ? 'casa' : 'pessoal' })
+  }
+  return [...mapa.values()]
+}
+
+/** Lê o estado real e devolve os problemas + plano de correção. */
+export async function diagnosticarEspelhosDoUsuario(userId: string): Promise<Diagnostico> {
+  await ensureEspelhoSchema()
+
+  const listaContas = await contasDoUsuario(userId)
+  const idsContas = listaContas.map(c => c.id)
+
+  const series = await db
+    .select({
+      id: recorrencias.id,
+      descricao: recorrencias.descricao,
+      contaId: recorrencias.contaId,
+      espelharContaId: recorrencias.espelharContaId,
+      ativa: recorrencias.ativa,
+    })
+    .from(recorrencias)
+    .where(eq(recorrencias.userId, userId))
+
+  const itens = idsContas.length > 0
+    ? await db
+        .select({
+          id: items.id,
+          descricao: items.descricao,
+          contaId: items.contaId,
+          recorrenciaId: items.recorrenciaId,
+          espelhoDe: items.espelhoDe,
+          mes: items.mes,
+        })
+        .from(items)
+        .where(or(eq(items.userId, userId), inArray(items.contaId, idsContas)))
+    : await db
+        .select({
+          id: items.id,
+          descricao: items.descricao,
+          contaId: items.contaId,
+          recorrenciaId: items.recorrenciaId,
+          espelhoDe: items.espelhoDe,
+          mes: items.mes,
+        })
+        .from(items)
+        .where(eq(items.userId, userId))
+
+  return diagnosticarEspelhos({
+    contas: listaContas,
+    series,
+    itens,
+  })
+}
+
+export interface CorrecaoResultado {
+  criados: number
+  movidos: number
+  apagados: number
+  falhas: number
+}
+
+/** Executa o plano do diagnóstico (só o que é corrigível). */
+export async function corrigirEspelhos(
+  userId: string,
+  plano: AcaoCorrecao[],
+): Promise<CorrecaoResultado> {
+  await ensureEspelhoSchema()
+
+  const contasPermitidas = new Set((await contasDoUsuario(userId)).map(c => c.id))
+  const resultado: CorrecaoResultado = { criados: 0, movidos: 0, apagados: 0, falhas: 0 }
+
+  for (const acao of plano) {
+    try {
+      if (acao.tipo === 'criar') {
+        if (!contasPermitidas.has(acao.destinoContaId)) { resultado.falhas++; continue }
+        const [origemItem] = await db.select().from(items).where(eq(items.id, acao.origemItemId))
+        if (!origemItem || origemItem.espelhoDe) { resultado.falhas++; continue }
+        const criado = await criarEspelhoDoItem(origemItem, acao.destinoContaId)
+        if (criado) resultado.criados++
+        else resultado.falhas++
+      } else if (acao.tipo === 'mover') {
+        if (!contasPermitidas.has(acao.destinoContaId)) { resultado.falhas++; continue }
+        const [atualizado] = await db
+          .update(items)
+          .set({ contaId: acao.destinoContaId })
+          .where(and(eq(items.id, acao.espelhoId), sql`${items.espelhoDe} IS NOT NULL`))
+          .returning()
+        if (atualizado) resultado.movidos++
+        else resultado.falhas++
+      } else {
+        // apagar espelho: nunca apaga lançamento de origem
+        const apagados = await db
+          .delete(items)
+          .where(and(eq(items.id, acao.espelhoId), sql`${items.espelhoDe} IS NOT NULL`))
+          .returning()
+        resultado.apagados += apagados.length
+      }
+    } catch (err) {
+      console.error('corrigirEspelhos: ação falhou', acao, err)
+      resultado.falhas++
+    }
+  }
+
+  return resultado
 }
