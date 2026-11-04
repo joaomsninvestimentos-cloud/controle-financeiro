@@ -16,6 +16,16 @@ import ContaSwitcher from './ContaSwitcher'
 import EditarContaModal from './EditarContaModal'
 import { normalizarRotuloSoma, resolverSelecao, ROTULO_SOMA } from '@/lib/contas-logic'
 import {
+  CHAVE_MARCAS,
+  marcasVisiveis,
+  normalizarMarca,
+  registrarMarca,
+  resumoMovidos,
+  rotuloMarca,
+  textoResumo,
+  type MarcaMovido,
+} from '@/lib/movidos-logic'
+import {
   deveAtualizarAoSoltar,
   deveRecarregarAoVoltar,
   deslocamentoIndicador,
@@ -228,6 +238,9 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
   const [refreshKey, setRefreshKey] = useState(0)
   const [pullDistancia, setPullDistancia] = useState(0)
   const [atualizando, setAtualizando] = useState(false)
+  // Checklist de "já movi para outra conta" (só no aparelho, expira em 7 dias)
+  const [marcas, setMarcas] = useState<MarcaMovido[]>([])
+  const [marcasCarregadas, setMarcasCarregadas] = useState(false)
   const pullInicio = useRef<number | null>(null)
   const pullDistanciaRef = useRef(0)
   const ultimaRecarga = useRef<number>(Date.now())
@@ -381,6 +394,24 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
       saldo = calc.saldoFim
     }
   }
+
+  // ── Marcas de "já movi" (localStorage) ────────────────────────────────────
+  useEffect(() => {
+    try {
+      const bruto = localStorage.getItem(CHAVE_MARCAS)
+      setMarcas(normalizarMarca(bruto ? JSON.parse(bruto) : []))
+    } catch {
+      setMarcas([])
+    }
+    setMarcasCarregadas(true)
+  }, [])
+
+  useEffect(() => {
+    if (!marcasCarregadas) return
+    try {
+      localStorage.setItem(CHAVE_MARCAS, JSON.stringify(marcas))
+    } catch { /* modo privado */ }
+  }, [marcas, marcasCarregadas])
 
   // ── Atualizar (puxar para baixo / voltar ao app) ───────────────────────────
   const recarregarTudo = useCallback(() => {
@@ -651,6 +682,21 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
     })
     if (res.ok) {
       const { item } = await res.json()
+
+      // Trocou de conta? Marca para o usuário saber o que já resolveu.
+      const destinoId = campos.contaId
+      const contaAnterior = items.find(i => i.id === id)?.contaId
+        ?? todosItems.find(i => i.id === id)?.contaId
+      if (destinoId && destinoId !== contaAnterior) {
+        const destino = contas.find(c => c.id === destinoId)
+        if (destino) {
+          const agora = Date.now()
+          setMarcas(prev => registrarMarca(prev, {
+            itemId: id, destinoId: destino.id, destinoNome: destino.nome, em: agora,
+          }, agora))
+        }
+      }
+
       setItems(prev => prev.map(i => i.id === id ? { ...i, ...item } : i))
       setTodosItems(prev => prev.map(i => i.id === id ? { ...i, ...item } : i))
       carregarTodosItems()
@@ -659,7 +705,7 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
     const dados = await res.json().catch(() => ({})) as { message?: string }
     mostrarErro(dados.message ?? 'Não foi possível salvar a edição.')
     throw new Error(dados.message ?? 'FALHA')
-  }, [mostrarErro, carregarTodosItems])
+  }, [mostrarErro, carregarTodosItems, items, todosItems, contas])
 
   // ── Remover ──────────────────────────────────────────────────────────────
   const removerItem = useCallback(async (id: string) => {
@@ -730,6 +776,9 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
   }
 
   const categorias = tipo === 'despesa' ? CATEGORIAS_DESPESA : CATEGORIAS_RECEITA
+  const marcasMapa = marcasVisiveis(marcas, Date.now())
+  const resumoMarcas = resumoMovidos(marcas, Date.now())
+
   const q = busca.trim().toLowerCase()
   const itemsFiltrados = q
     ? items.filter(i =>
@@ -1129,20 +1178,34 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
                 className="w-full rounded-2xl border border-[rgba(45,42,38,0.12)] dark:border-[rgba(255,255,255,0.07)] bg-white dark:bg-[#342F2B] pl-10 pr-4 py-3 text-sm text-[#2D2A26] dark:text-[#E8E0D5] placeholder-[#8C857C] outline-none focus:ring-2 focus:ring-[#8FB39A]/50 shadow-snug"
               />
             </div>
+            {resumoMarcas.total > 0 && (
+              <div className="flex items-center justify-between gap-2 rounded-2xl bg-[#8FB39A]/10 border border-[#8FB39A]/30 px-3 py-2">
+                <span className="text-[11px] font-bold text-[#5f8a6d] dark:text-[#8FB39A] flex items-center gap-1">
+                  <Check size={12} /> {textoResumo(resumoMarcas)}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setMarcas([])}
+                  className="text-[10px] font-semibold text-[#8C857C] hover:text-[#D4A0A0] transition shrink-0"
+                >
+                  limpar marcas
+                </button>
+              </div>
+            )}
             {q && itemsFiltrados.length === 0 && (
               <p className="text-center text-sm text-[#8C857C] py-6">Nenhum lançamento para “{busca}”.</p>
             )}
             {itemsFiltrados.filter(i=>i.tipo==='receita').length>0&&(
               <Section titulo="💰 Receitas">
                 {itemsFiltrados.filter(i=>i.tipo==='receita').map(i=>(
-                  <ItemCard key={i.id} item={i} contas={contas} currentUser={user} contaSelecionada={contaSelecionada} onRemover={removerItem} onEditar={editarItem}/>
+                  <ItemCard key={i.id} item={i} contas={contas} currentUser={user} contaSelecionada={contaSelecionada} onRemover={removerItem} onEditar={editarItem} marca={marcasMapa.get(i.id)}/>
                 ))}
               </Section>
             )}
             {itemsFiltrados.filter(i=>i.tipo==='despesa').length>0&&(
               <Section titulo="💸 Despesas">
                 {itemsFiltrados.filter(i=>i.tipo==='despesa').map(i=>(
-                  <ItemCard key={i.id} item={i} contas={contas} currentUser={user} contaSelecionada={contaSelecionada} onRemover={removerItem} onEditar={editarItem}/>
+                  <ItemCard key={i.id} item={i} contas={contas} currentUser={user} contaSelecionada={contaSelecionada} onRemover={removerItem} onEditar={editarItem} marca={marcasMapa.get(i.id)}/>
                 ))}
               </Section>
             )}
@@ -1281,9 +1344,10 @@ interface ItemCardProps {
   contaSelecionada: string | 'tudo'
   onRemover: (id: string) => void
   onEditar: (id: string, c: Partial<Pick<Item,'descricao'|'valor'|'categoria'|'data'|'contaId'|'recorrente'>> & { espelharNaContaId?: string | null }) => Promise<void>
+  marca?: MarcaMovido
 }
 
-function ItemCard({ item, contas, currentUser, contaSelecionada, onRemover, onEditar }: ItemCardProps) {
+function ItemCard({ item, contas, currentUser, contaSelecionada, onRemover, onEditar, marca }: ItemCardProps) {
   const cor = CORES[item.categoria]??'#C4C4C4'
   const conta = contas.find(c => c.id === item.contaId)
   const [editando, setEditando] = useState(false)
@@ -1447,6 +1511,14 @@ function ItemCard({ item, contas, currentUser, contaSelecionada, onRemover, onEd
                 title="Esta despesa também aparece na conta da casa"
               >
                 🏠 {nomeContaEspelho ?? 'na casa'}
+              </span>
+            )}
+            {marca && (
+              <span
+                className="ml-1.5 inline-flex items-center gap-0.5 text-[10px] text-[#5f8a6d] dark:text-[#8FB39A] bg-[#8FB39A]/20 rounded-full px-1.5 py-0.5"
+                title={`Já movido para ${marca.destinoNome} (marca do seu aparelho, some em 7 dias)`}
+              >
+                <Check size={9} /> {rotuloMarca(marca)}
               </span>
             )}
           </p>
