@@ -1,8 +1,9 @@
 import 'server-only'
 
 import { db } from '@/db'
-import { contas, contaMembers, users } from '@/db/schemas/schema'
+import { contas, contaMembers, users, items, recorrencias, orcamentos } from '@/db/schemas/schema'
 import { and, eq, inArray, sql } from 'drizzle-orm'
+import { planejarTransferencia } from './mover-logic'
 import { DDL_CONTAS } from './contas-ddl'
 import {
   avaliarConvite,
@@ -453,4 +454,229 @@ export async function contasResumo(userId: string, nomeUsuario: string): Promise
     cor: c.cor,
     emoji: c.emoji,
   }))
+}
+
+/* ───────────── Transferência de registros entre contas ───────────── */
+
+export interface TransferirInput {
+  userId: string
+  deContaId: string
+  paraContaId: string
+  incluirLancamentos: boolean
+  incluirFixas: boolean
+  incluirOrcamentos: boolean
+}
+
+export interface TransferirResultado {
+  fixas: number
+  lancamentos: number
+  orcamentos: number
+  orcamentosIgnorados: number
+  espelhosPreservados: number
+}
+
+/** Conta acessível ao usuário (dono ou membro ativo), com o tipo. */
+async function contaComAcesso(userId: string, contaId: string) {
+  const [propria] = await db
+    .select()
+    .from(contas)
+    .where(and(eq(contas.id, contaId), eq(contas.userId, userId)))
+  if (propria) return { conta: propria, isOwner: true }
+
+  const [membro] = await db
+    .select()
+    .from(contaMembers)
+    .where(and(
+      eq(contaMembers.contaId, contaId),
+      eq(contaMembers.userId, userId),
+      eq(contaMembers.status, 'active'),
+    ))
+  if (!membro) return null
+
+  const [conta] = await db.select().from(contas).where(eq(contas.id, contaId))
+  return conta ? { conta, isOwner: false } : null
+}
+
+/**
+ * Transferência real: troca `conta_id` de séries, lançamentos e (opcional)
+ * orçamentos, tudo numa transação. Preserva ids, datas e valores; espelhos da
+ * casa ficam onde estão.
+ */
+export async function transferirRegistros(input: TransferirInput): Promise<TransferirResultado | null> {
+  await ensureContasSchema()
+
+  const origem = await contaComAcesso(input.userId, input.deContaId)
+  if (!origem || !origem.isOwner) return null
+
+  const destino = await contaComAcesso(input.userId, input.paraContaId)
+  if (!destino) return null
+
+  // Lê o que existe hoje para montar o plano (regra pura).
+  const [itens, series, orcamentosOrigem, orcamentosDestino] = await Promise.all([
+    db
+      .select({
+        id: items.id,
+        contaId: items.contaId,
+        recorrente: items.recorrente,
+        recorrenciaId: items.recorrenciaId,
+        espelhoDe: items.espelhoDe,
+        userId: items.userId,
+      })
+      .from(items)
+      .where(eq(items.contaId, input.deContaId)),
+    db
+      .select({
+        id: recorrencias.id,
+        contaId: recorrencias.contaId,
+        userId: recorrencias.userId,
+        ativa: recorrencias.ativa,
+      })
+      .from(recorrencias)
+      .where(eq(recorrencias.contaId, input.deContaId)),
+    db
+      .select({
+        id: orcamentos.id,
+        contaId: orcamentos.contaId,
+        mes: orcamentos.mes,
+        categoria: orcamentos.categoria,
+      })
+      .from(orcamentos)
+      .where(eq(orcamentos.contaId, input.deContaId)),
+    db
+      .select({
+        id: orcamentos.id,
+        contaId: orcamentos.contaId,
+        mes: orcamentos.mes,
+        categoria: orcamentos.categoria,
+      })
+      .from(orcamentos)
+      .where(eq(orcamentos.contaId, input.paraContaId)),
+  ])
+
+  const tipoOrigem = tipoValido(origem.conta.tipo) ? origem.conta.tipo : 'pessoal'
+  const plano = planejarTransferencia({
+    origem: { id: input.deContaId, tipo: tipoOrigem },
+    usuarioId: input.userId,
+    opcoes: {
+      incluirLancamentos: input.incluirLancamentos,
+      incluirFixas: input.incluirFixas,
+      incluirOrcamentos: input.incluirOrcamentos,
+    },
+    itens,
+    series,
+    orcamentosOrigem,
+    orcamentosDestino,
+  })
+
+  // Espelhos que continuam na origem (apontando para itens que vão mudar de
+  // conta): são preservados de propósito — a despesa segue visível na casa.
+  const idsMovidos = new Set(plano.itemIds)
+  const espelhosPreservados = itens.filter(i => i.espelhoDe && idsMovidos.has(i.espelhoDe)).length
+
+  if (plano.serieIds.length === 0 && plano.itemIds.length === 0 && plano.orcamentoIds.length === 0) {
+    return { fixas: 0, lancamentos: 0, orcamentos: 0, orcamentosIgnorados: plano.counts.orcamentosIgnorados, espelhosPreservados }
+  }
+
+  await db.transaction(async tx => {
+    if (plano.serieIds.length > 0) {
+      await tx
+        .update(recorrencias)
+        .set({ contaId: input.paraContaId })
+        .where(inArray(recorrencias.id, plano.serieIds))
+    }
+    if (plano.itemIds.length > 0) {
+      await tx
+        .update(items)
+        .set({ contaId: input.paraContaId })
+        .where(and(inArray(items.id, plano.itemIds), sql`${items.espelhoDe} IS NULL`))
+    }
+    if (plano.orcamentoIds.length > 0) {
+      await tx
+        .update(orcamentos)
+        .set({ contaId: input.paraContaId })
+        .where(inArray(orcamentos.id, plano.orcamentoIds))
+    }
+  })
+
+  return {
+    fixas: plano.counts.fixas,
+    lancamentos: plano.counts.lancamentos,
+    orcamentos: plano.counts.orcamentos,
+    orcamentosIgnorados: plano.counts.orcamentosIgnorados,
+    espelhosPreservados,
+  }
+}
+
+/** Prévia (só contagens) para mostrar antes de confirmar. */
+export async function previaTransferencia(input: Omit<TransferirInput, 'incluirLancamentos' | 'incluirFixas' | 'incluirOrcamentos'> & {
+  incluirLancamentos: boolean
+  incluirFixas: boolean
+  incluirOrcamentos: boolean
+}): Promise<TransferirResultado | null> {
+  const origem = await contaComAcesso(input.userId, input.deContaId)
+  if (!origem || !origem.isOwner) return null
+  const destino = await contaComAcesso(input.userId, input.paraContaId)
+  if (!destino) return null
+
+  const [itens, series, orcamentosOrigem, orcamentosDestino] = await Promise.all([
+    db
+      .select({
+        id: items.id,
+        contaId: items.contaId,
+        recorrente: items.recorrente,
+        recorrenciaId: items.recorrenciaId,
+        espelhoDe: items.espelhoDe,
+        userId: items.userId,
+      })
+      .from(items)
+      .where(eq(items.contaId, input.deContaId)),
+    db
+      .select({
+        id: recorrencias.id,
+        contaId: recorrencias.contaId,
+        userId: recorrencias.userId,
+        ativa: recorrencias.ativa,
+      })
+      .from(recorrencias)
+      .where(eq(recorrencias.contaId, input.deContaId)),
+    db
+      .select({
+        id: orcamentos.id,
+        contaId: orcamentos.contaId,
+        mes: orcamentos.mes,
+        categoria: orcamentos.categoria,
+      })
+      .from(orcamentos)
+      .where(eq(orcamentos.contaId, input.deContaId)),
+    db
+      .select({
+        id: orcamentos.id,
+        contaId: orcamentos.contaId,
+        mes: orcamentos.mes,
+        categoria: orcamentos.categoria,
+      })
+      .from(orcamentos)
+      .where(eq(orcamentos.contaId, input.paraContaId)),
+  ])
+
+  const tipoOrigem = tipoValido(origem.conta.tipo) ? origem.conta.tipo : 'pessoal'
+  const plano = planejarTransferencia({
+    origem: { id: input.deContaId, tipo: tipoOrigem },
+    usuarioId: input.userId,
+    opcoes: {
+      incluirLancamentos: input.incluirLancamentos,
+      incluirFixas: input.incluirFixas,
+      incluirOrcamentos: input.incluirOrcamentos,
+    },
+    itens,
+    series,
+    orcamentosOrigem,
+    orcamentosDestino,
+  })
+
+  const idsMovidos = new Set(plano.itemIds)
+  return {
+    ...plano.counts,
+    espelhosPreservados: itens.filter(i => i.espelhoDe && idsMovidos.has(i.espelhoDe)).length,
+  }
 }

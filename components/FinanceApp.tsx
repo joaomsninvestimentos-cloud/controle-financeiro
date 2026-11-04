@@ -768,6 +768,46 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
     mostrarAviso('Conta excluída. Os lançamentos continuam em "Somar tudo".')
   }, [contaSelecionada, selecionarConta, carregarContas, carregarTodosItems, mostrarErro, mostrarAviso])
 
+  // ── Transferir registros entre contas ─────────────────────────────────────
+  const transferirRegistros = useCallback(async (
+    deContaId: string,
+    paraContaId: string,
+    opcoes: { incluirLancamentos: boolean; incluirFixas: boolean; incluirOrcamentos: boolean },
+  ): Promise<{ fixas: number; lancamentos: number; orcamentos: number; orcamentosIgnorados: number; espelhosPreservados: number } | { erro: string }> => {
+    try {
+      const res = await fetch(`/api/contas/${deContaId}/mover`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ paraContaId, ...opcoes }),
+      })
+      const dados = await res.json().catch(() => ({})) as {
+        message?: string; fixas?: number; lancamentos?: number; orcamentos?: number
+        orcamentosIgnorados?: number; espelhosPreservados?: number
+      }
+      if (!res.ok) return { erro: dados.message ?? 'Não foi possível transferir.' }
+
+      const partes = [
+        (dados.fixas ?? 0) > 0 ? `${dados.fixas} fixa(s)` : '',
+        (dados.lancamentos ?? 0) > 0 ? `${dados.lancamentos} lançamento(s)` : '',
+        (dados.orcamentos ?? 0) > 0 ? `${dados.orcamentos} orçamento(s)` : '',
+      ].filter(Boolean)
+      mostrarAviso(partes.length > 0 ? `Transferido: ${partes.join(', ')}.` : 'Nada para transferir.')
+
+      carregarContas()
+      carregarTodosItems()
+      setRefreshKey(k => k + 1)
+      return {
+        fixas: dados.fixas ?? 0,
+        lancamentos: dados.lancamentos ?? 0,
+        orcamentos: dados.orcamentos ?? 0,
+        orcamentosIgnorados: dados.orcamentosIgnorados ?? 0,
+        espelhosPreservados: dados.espelhosPreservados ?? 0,
+      }
+    } catch {
+      return { erro: 'Sem conexão. Verifique sua internet.' }
+    }
+  }, [carregarContas, carregarTodosItems, mostrarAviso])
+
   // ── Logout ───────────────────────────────────────────────────────────────
   const logout = async () => {
     await fetch('/api/auth/me', { method: 'POST' })
@@ -1248,9 +1288,11 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
       {contaEmEdicao && (
         <EditarContaModal
           conta={contaEmEdicao}
+          contas={contas}
           onClose={() => setContaEmEdicao(null)}
           onSalvar={async campos => { await atualizarConta(contaEmEdicao.id, campos) }}
           onExcluir={async () => { await excluirConta(contaEmEdicao.id) }}
+          onTransferir={transferirRegistros}
         />
       )}
 
