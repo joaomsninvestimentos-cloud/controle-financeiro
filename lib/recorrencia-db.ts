@@ -5,6 +5,7 @@ import { DDL_RECORRENCIA } from './recorrencia-ddl'
 import { items, contas, contaMembers, recorrencias, recorrenciaPulos } from '@/db/schemas/schema'
 import { and, eq, gt, inArray, or, sql, desc } from 'drizzle-orm'
 import { espelharOcorrenciasNovas } from './espelho-db'
+import { agruparDuplicadas, planejarConsolidacao } from './recorrencia-dup-logic'
 import {
   dataDaOcorrencia,
   diaDoMes,
@@ -496,4 +497,139 @@ export async function listarRecorrencias(userId: string): Promise<RecorrenciaRes
       ocorrencias: totalPorSerie.get(s.id) ?? 0,
     }
   })
+}
+
+/* ───────────── Duplicadas: listar e consolidar ───────────── */
+
+export interface DuplicadaCompleta {
+  chave: string
+  descricao: string
+  valor: string
+  contaId: string | null
+  principal: { id: string; mesInicio: string }
+  outras: Array<{ id: string; mesInicio: string; ocorrencias: number }>
+  ocorrenciasTotal: number
+  itensEnvolvidos: number
+}
+
+/** Séries ativas do usuário que representam a mesma despesa mais de uma vez. */
+export async function listarDuplicadas(userId: string): Promise<DuplicadaCompleta[]> {
+  const series = await listarRecorrencias(userId)
+  const grupos = agruparDuplicadas(series.map(s => ({
+    id: s.id,
+    descricao: s.descricao,
+    valor: s.valor,
+    contaId: s.contaId,
+    mesInicio: s.mesInicio,
+    ativa: true,
+    ocorrencias: s.ocorrencias,
+  })))
+
+  return grupos.map(g => ({
+    chave: g.chave,
+    descricao: g.descricao,
+    valor: g.valor,
+    contaId: g.contaId,
+    principal: { id: g.principal.id, mesInicio: g.principal.mesInicio },
+    outras: g.outras.map(s => ({ id: s.id, mesInicio: s.mesInicio, ocorrencias: s.ocorrencias })),
+    ocorrenciasTotal: g.ocorrenciasTotal,
+    itensEnvolvidos: g.ocorrenciasTotal,
+  }))
+}
+
+export interface ConsolidacaoResultado {
+  mantidas: number
+  encerradas: number
+  movidos: number
+  removidos: number
+  espelhosRemovidos: number
+}
+
+/**
+ * Junta séries duplicadas na mais antiga:
+ * - meses que só a duplicada tinha passam para a principal;
+ * - meses repetidos ficam com a ocorrência da principal (a duplicada sai,
+ *   com o espelho dela), para não contar duas vezes;
+ * - a duplicada é encerrada e, se ela espelhava na casa e a principal não,
+ *   a marca passa para a principal.
+ */
+export async function consolidarDuplicadas(
+  userId: string,
+  manterId: string,
+  juntarIds: string[],
+): Promise<ConsolidacaoResultado | null> {
+  await ensureRecorrenciaSchema()
+
+  const principal = await podeGerenciar(userId, manterId)
+  if (!principal) return null
+
+  const alvos = juntarIds.filter(id => id !== manterId)
+  const seriesParaJuntar: RecorrenciaRow[] = []
+  for (const id of alvos) {
+    const serie = await podeGerenciar(userId, id)
+    if (!serie) return null
+    seriesParaJuntar.push(serie)
+  }
+  if (seriesParaJuntar.length === 0) return null
+
+  const itens = await db
+    .select({
+      id: items.id,
+      recorrenciaId: items.recorrenciaId,
+      mes: items.mes,
+      espelhoDe: items.espelhoDe,
+    })
+    .from(items)
+    .where(inArray(items.recorrenciaId, [manterId, ...alvos]))
+
+  const plano = planejarConsolidacao(
+    itens
+      .filter(i => i.recorrenciaId !== null)
+      .map(i => ({
+        id: i.id,
+        recorrenciaId: i.recorrenciaId as string,
+        mes: i.mes,
+        espelhoDe: i.espelhoDe ?? null,
+      })),
+    manterId,
+    alvos,
+  )
+
+  if (plano.removerEspelhos.length > 0) {
+    await db.delete(items).where(inArray(items.id, plano.removerEspelhos))
+  }
+  if (plano.remover.length > 0) {
+    await db.delete(items).where(inArray(items.id, plano.remover))
+  }
+  if (plano.mover.length > 0) {
+    await db.update(items).set({ recorrenciaId: manterId }).where(inArray(items.id, plano.mover))
+  }
+
+  const mesFim = principal.mesFim ?? seriesParaJuntar.map(s => s.mesFim).filter(Boolean).sort().pop() ?? null
+  const espelhoDaCasa = principal.espelharContaId
+    ?? seriesParaJuntar.map(s => s.espelharContaId).find(Boolean)
+    ?? null
+
+  await db
+    .update(recorrencias)
+    .set({ espelharContaId: espelhoDaCasa, mesFim })
+    .where(eq(recorrencias.id, manterId))
+
+  await db
+    .update(recorrencias)
+    .set({ ativa: false })
+    .where(inArray(recorrencias.id, alvos))
+
+  // A principal pode ter ficado sem cópia na casa: garante agora.
+  if (espelhoDaCasa) {
+    await espelharOcorrenciasNovas(manterId, espelhoDaCasa)
+  }
+
+  return {
+    mantidas: 1,
+    encerradas: alvos.length,
+    movidos: plano.mover.length,
+    removidos: plano.remover.length,
+    espelhosRemovidos: plano.removerEspelhos.length,
+  }
 }

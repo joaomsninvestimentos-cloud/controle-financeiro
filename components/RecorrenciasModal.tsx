@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
-import { X, RefreshCw, Loader2, CalendarOff, Ban, Repeat } from 'lucide-react'
+import { X, RefreshCw, Loader2, CalendarOff, Ban, Repeat, Copy, Merge } from 'lucide-react'
 import { fmt, fmtMes, parsearValor, type Conta } from './FinanceApp'
 
 interface Recorrencia {
@@ -18,6 +18,16 @@ interface Recorrencia {
   ocorrencias: number
 }
 
+interface Duplicada {
+  chave: string
+  descricao: string
+  valor: string
+  contaId: string | null
+  principal: { id: string; mesInicio: string }
+  outras: Array<{ id: string; mesInicio: string; ocorrencias: number }>
+  ocorrenciasTotal: number
+}
+
 interface Props {
   mesSelecionado: string
   contas: Conta[]
@@ -30,6 +40,8 @@ export default function RecorrenciasModal({ mesSelecionado, contas, onClose, onC
   const [series, setSeries] = useState<Recorrencia[]>([])
   const [carregando, setCarregando] = useState(true)
   const [acaoId, setAcaoId] = useState<string | null>(null)
+  const [duplicadas, setDuplicadas] = useState<Duplicada[]>([])
+  const [juntando, setJuntando] = useState<string | null>(null)
 
   const carregar = useCallback(() => {
     setCarregando(true)
@@ -40,7 +52,49 @@ export default function RecorrenciasModal({ mesSelecionado, contas, onClose, onC
       .finally(() => setCarregando(false))
   }, [mesSelecionado])
 
+  const carregarDuplicadas = useCallback(() => {
+    fetch('/api/recorrencias/duplicadas')
+      .then(r => r.json())
+      .then(d => setDuplicadas(d.duplicadas ?? []))
+      .catch(() => {})
+  }, [])
+
   useEffect(() => { carregar() }, [carregar])
+  useEffect(() => { carregarDuplicadas() }, [carregarDuplicadas])
+
+  const juntar = async (grupo: Duplicada) => {
+    const total = grupo.outras.length + 1
+    const pergunta = [
+      `Juntar ${total} despesas fixas "${grupo.descricao}"?`,
+      '',
+      `Fica a mais antiga (desde ${fmtMes(grupo.principal.mesInicio)}). As outras ${grupo.outras.length} são encerradas e os lançamentos delas passam para essa.`,
+      '',
+      'Meses que existem nos dois lados ficam com um só — nada é contado duas vezes.',
+    ].join('\n')
+    if (!confirm(pergunta)) return
+
+    setJuntando(grupo.chave)
+    try {
+      const res = await fetch('/api/recorrencias/duplicadas', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ manterId: grupo.principal.id, juntarIds: grupo.outras.map(o => o.id) }),
+      })
+      const dados = await res.json().catch(() => ({})) as { message?: string; movidos?: number; removidos?: number }
+      if (!res.ok) {
+        onAviso(dados.message ?? 'Não foi possível juntar as despesas.')
+        return
+      }
+      onAviso(`Despesas juntadas. ${dados.movidos ?? 0} lançamento(s) movidos.`)
+      carregar()
+      carregarDuplicadas()
+      onChanged()
+    } catch {
+      onAviso('Sem conexão. Verifique sua internet.')
+    } finally {
+      setJuntando(null)
+    }
+  }
 
   const acao = async (id: string, tipo: 'encerrar' | 'pular', descricao: string) => {
     const perguntas = {
@@ -146,6 +200,46 @@ export default function RecorrenciasModal({ mesSelecionado, contas, onClose, onC
             </div>
           )
         })}
+
+        {duplicadas.length > 0 && (
+          <div className="space-y-2 pt-1">
+            <p className="text-[11px] font-bold text-[#E8A87C] uppercase tracking-wide flex items-center gap-1.5">
+              <Copy size={11} /> Despesas fixas duplicadas
+            </p>
+            <p className="text-[11px] text-[#8C857C] dark:text-[#9E9890] leading-relaxed">
+              A mesma despesa foi criada mais de uma vez. Isso faz o espelho da casa cair na cópia errada.
+              Junte para ficar uma só.
+            </p>
+
+            {duplicadas.map(g => {
+              const conta = contas.find(c => c.id === g.contaId)
+              return (
+                <div key={g.chave} className="rounded-2xl border border-dashed border-[#E8A87C]/50 bg-[#E8A87C]/5 p-3 space-y-2">
+                  <div className="flex items-start gap-2">
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm font-bold text-[#2D2A26] dark:text-[#E8E0D5] truncate">{g.descricao}</p>
+                      <p className="text-[11px] text-[#8C857C] dark:text-[#9E9890]">
+                        {g.outras.length + 1} cópias · {g.ocorrenciasTotal} lançamento(s)
+                        {conta ? ` · ${conta.emoji} ${conta.nome}` : ''}
+                      </p>
+                      <p className="text-[10px] text-[#8C857C] dark:text-[#9E9890]">
+                        fica a de {fmtMes(g.principal.mesInicio)}
+                      </p>
+                    </div>
+                    <span className="font-bold text-sm shrink-0 text-[#D4A0A0]">{fmt(parsearValor(g.valor))}</span>
+                  </div>
+                  <button
+                    onClick={() => juntar(g)}
+                    disabled={juntando === g.chave}
+                    className="w-full inline-flex items-center justify-center gap-1.5 text-[11px] font-bold text-white bg-[#E8A87C] rounded-full px-3 py-2 active:scale-95 disabled:opacity-60 transition"
+                  >
+                    {juntando === g.chave ? <Loader2 size={11} className="animate-spin" /> : <Merge size={11} />} Juntar em uma só
+                  </button>
+                </div>
+              )
+            })}
+          </div>
+        )}
 
         <button
           onClick={carregar}
