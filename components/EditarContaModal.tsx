@@ -1,30 +1,49 @@
 'use client'
 
-import { useState } from 'react'
-import { Check, Loader2, Pencil, X, Trash2 } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Check, Loader2, Pencil, X, Trash2, ArrowRightLeft } from 'lucide-react'
 import { type Conta, fmt, parsearValor } from './FinanceApp'
 import { motivoNaoExcluir, podeEditarConta, podeExcluirConta } from '@/lib/contas-logic'
+import { avisoTransferencia, destinosPossiveis, nadaParaTransferir, resumoTransferencia } from '@/lib/mover-logic'
+import type { TransferirResultado } from '@/lib/contas-db'
 
 const CORES = ['#8FB39A','#B8A9D4','#D4A0A0','#E8A87C','#A0B8D4','#A0D4C4','#E8C4A0','#2D2A26']
 const EMOJIS = ['🏦','🏠','💰','👤','💳','🏧','💵','🪙','💼','🏪']
 
 interface Props {
   conta: Conta
+  contas: Conta[]
   onClose: () => void
   onSalvar: (campos: { nome: string; cor: string; emoji: string }) => Promise<void>
   onExcluir: () => Promise<void>
+  onTransferir: (
+    deContaId: string,
+    paraContaId: string,
+    opcoes: { incluirLancamentos: boolean; incluirFixas: boolean; incluirOrcamentos: boolean },
+  ) => Promise<TransferirResultado | { erro: string }>
 }
 
 /**
  * Edição de uma conta direto da barra de contas: renomear, trocar cor/emoji
  * e — quando permitido — excluir. "Somar tudo" não entra aqui (não é conta).
  */
-export default function EditarContaModal({ conta, onClose, onSalvar, onExcluir }: Props) {
+export default function EditarContaModal({ conta, contas, onClose, onSalvar, onExcluir, onTransferir }: Props) {
   const [nome, setNome] = useState(conta.nome)
   const [cor, setCor] = useState(conta.cor ?? CORES[0])
   const [emoji, setEmoji] = useState(conta.emoji ?? '🏦')
   const [salvando, setSalvando] = useState(false)
   const [excluindo, setExcluindo] = useState(false)
+
+  // Transferência para outra conta
+  const destinos = destinosPossiveis(contas, conta.id)
+  const [paraContaId, setParaContaId] = useState('')
+  const [incluirFixas, setIncluirFixas] = useState(true)
+  const [incluirLancamentos, setIncluirLancamentos] = useState(true)
+  const [incluirOrcamentos, setIncluirOrcamentos] = useState(false)
+  const [previa, setPrevia] = useState<TransferirResultado | null>(null)
+  const [carregandoPrevia, setCarregandoPrevia] = useState(false)
+  const [transferindo, setTransferindo] = useState(false)
+  const [erroTransferencia, setErroTransferencia] = useState('')
 
   const tipo = (conta.tipo ?? 'pessoal') as 'pessoal' | 'casa'
   const regras = { tipo, isOwner: conta.isOwner }
@@ -32,6 +51,59 @@ export default function EditarContaModal({ conta, onClose, onSalvar, onExcluir }
   const bloqueioExclusao = motivoNaoExcluir(regras)
   const podeExcluir = podeExcluirConta(regras)
   const temOutrasPessoas = conta.membros.some(m => m.status === 'active')
+
+  useEffect(() => {
+    if (!paraContaId) {
+      setPrevia(null)
+      return
+    }
+    let cancelado = false
+    setCarregandoPrevia(true)
+    setErroTransferencia('')
+    const params = new URLSearchParams({
+      paraContaId,
+      incluirFixas: incluirFixas ? '1' : '0',
+      incluirLancamentos: incluirLancamentos ? '1' : '0',
+      incluirOrcamentos: incluirOrcamentos ? '1' : '0',
+    })
+    fetch(`/api/contas/${conta.id}/mover?${params}`)
+      .then(async r => {
+        const d = await r.json().catch(() => ({}))
+        if (cancelado) return
+        if (!r.ok) {
+          setPrevia(null)
+          setErroTransferencia(d.message ?? 'Não foi possível calcular o que será movido.')
+          return
+        }
+        setPrevia(d as TransferirResultado)
+      })
+      .catch(() => { if (!cancelado) setErroTransferencia('Sem conexão.') })
+      .finally(() => { if (!cancelado) setCarregandoPrevia(false) })
+
+    return () => { cancelado = true }
+  }, [paraContaId, incluirFixas, incluirLancamentos, incluirOrcamentos, conta.id])
+
+  const transferir = async () => {
+    if (!paraContaId || !previa || !conta.isOwner) return
+    const destino = destinos.find(c => c.id === paraContaId)
+    if (!destino) return
+
+    const aviso = avisoTransferencia(conta.nome, destino.nome, previa)
+    if (!confirm(aviso)) return
+
+    setTransferindo(true)
+    setErroTransferencia('')
+    const resultado = await onTransferir(conta.id, paraContaId, {
+      incluirLancamentos, incluirFixas, incluirOrcamentos,
+    })
+    setTransferindo(false)
+
+    if ('erro' in resultado) {
+      setErroTransferencia(resultado.erro)
+      return
+    }
+    onClose()
+  }
 
   const salvar = async () => {
     if (!podeSalvar) return
@@ -137,6 +209,87 @@ export default function EditarContaModal({ conta, onClose, onSalvar, onExcluir }
         >
           {salvando ? <Loader2 size={15} className="animate-spin" /> : <Check size={15} />} Salvar
         </button>
+
+        {/* Transferir registros para outra conta */}
+        {conta.isOwner && destinos.length > 0 && (
+          <div className="rounded-2xl border border-dashed border-[rgba(45,42,38,0.18)] dark:border-[rgba(255,255,255,0.14)] p-3 space-y-2.5">
+            <div className="flex items-start gap-2">
+              <ArrowRightLeft size={14} className="text-[#8FB39A] mt-0.5 shrink-0" />
+              <div className="min-w-0">
+                <p className="text-xs font-bold text-[#2D2A26] dark:text-[#E8E0D5]">Transferir para outra conta</p>
+                <p className="text-[10px] text-[#8C857C] dark:text-[#9E9890] leading-relaxed">
+                  Os registros só mudam de conta. Nada é recriado e nenhum valor é redigitado.
+                </p>
+              </div>
+            </div>
+
+            <div className="relative">
+              <select
+                value={paraContaId}
+                onChange={e => setParaContaId(e.target.value)}
+                aria-label="Conta de destino"
+                className="w-full appearance-none rounded-xl border border-[rgba(45,42,38,0.12)] dark:border-[rgba(255,255,255,0.07)] bg-[#FAF6F1] dark:bg-[#3E3935] px-3 py-2 text-xs text-[#2D2A26] dark:text-[#E8E0D5] outline-none focus:ring-2 focus:ring-[#8FB39A]/50 pr-8"
+              >
+                <option value="">Escolher conta de destino…</option>
+                {destinos.map(c => (
+                  <option key={c.id} value={c.id}>{c.emoji} {c.nome}</option>
+                ))}
+              </select>
+            </div>
+
+            {paraContaId && (
+              <div className="space-y-1.5">
+                <label className="flex items-center gap-2 text-[11px] text-[#2D2A26] dark:text-[#E8E0D5]">
+                  <input type="checkbox" checked={incluirFixas} onChange={e => setIncluirFixas(e.target.checked)} className="w-4 h-4 accent-[#8FB39A]" />
+                  Despesas fixas (com o histórico delas)
+                </label>
+                <label className="flex items-center gap-2 text-[11px] text-[#2D2A26] dark:text-[#E8E0D5]">
+                  <input type="checkbox" checked={incluirLancamentos} onChange={e => setIncluirLancamentos(e.target.checked)} className="w-4 h-4 accent-[#8FB39A]" />
+                  Lançamentos avulsos
+                </label>
+                <label className="flex items-center gap-2 text-[11px] text-[#2D2A26] dark:text-[#E8E0D5]">
+                  <input type="checkbox" checked={incluirOrcamentos} onChange={e => setIncluirOrcamentos(e.target.checked)} className="w-4 h-4 accent-[#8FB39A]" />
+                  Orçamentos por categoria
+                </label>
+              </div>
+            )}
+
+            {carregandoPrevia && (
+              <p className="text-[11px] text-[#8C857C] flex items-center gap-1.5">
+                <Loader2 size={11} className="animate-spin" /> Calculando…
+              </p>
+            )}
+
+            {previa && !carregandoPrevia && (
+              <div className="rounded-xl bg-[#FAF6F1] dark:bg-[#3E3935] px-2.5 py-2 space-y-1">
+                {nadaParaTransferir(previa) ? (
+                  <p className="text-[11px] text-[#8C857C]">Nada para mover nessa combinação.</p>
+                ) : (
+                  resumoTransferencia(previa).map(linha => (
+                    <p key={linha} className="text-[11px] text-[#2D2A26] dark:text-[#E8E0D5]">• {linha}</p>
+                  ))
+                )}
+                {previa.espelhosPreservados > 0 && (
+                  <p className="text-[10px] text-[#8C857C] dark:text-[#9E9890]">
+                    {previa.espelhosPreservados} cópia(s) na conta da casa continuam lá.
+                  </p>
+                )}
+              </div>
+            )}
+
+            {erroTransferencia && (
+              <p className="text-[11px] text-[#D4A0A0]">{erroTransferencia}</p>
+            )}
+
+            <button
+              onClick={transferir}
+              disabled={!previa || carregandoPrevia || transferindo || nadaParaTransferir(previa)}
+              className="w-full inline-flex items-center justify-center gap-1.5 rounded-full bg-[#2D2A26] dark:bg-[#E8E0D5] text-white dark:text-[#2D2A26] text-xs font-bold py-2.5 active:scale-95 disabled:opacity-40 transition"
+            >
+              {transferindo ? <Loader2 size={12} className="animate-spin" /> : <ArrowRightLeft size={12} />} Mover registros
+            </button>
+          </div>
+        )}
 
         <div className="pt-1 border-t border-[rgba(45,42,38,0.08)] dark:border-[rgba(255,255,255,0.07)]">
           {podeExcluir ? (
