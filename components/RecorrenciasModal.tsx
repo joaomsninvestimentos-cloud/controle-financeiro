@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
-import { X, RefreshCw, Loader2, CalendarOff, Ban, Repeat, Copy, Merge } from 'lucide-react'
+import { X, RefreshCw, Loader2, CalendarOff, Ban, Repeat, Copy, Merge, Stethoscope, Wrench } from 'lucide-react'
 import { fmt, fmtMes, parsearValor, type Conta } from './FinanceApp'
 
 interface Recorrencia {
@@ -42,6 +42,12 @@ export default function RecorrenciasModal({ mesSelecionado, contas, onClose, onC
   const [acaoId, setAcaoId] = useState<string | null>(null)
   const [duplicadas, setDuplicadas] = useState<Duplicada[]>([])
   const [juntando, setJuntando] = useState<string | null>(null)
+  const [diag, setDiag] = useState<{
+    resumo: { erros: number; avisos: number; corrigiveis: number }
+    problemas: Array<{ tipo: string; titulo: string; detalhe: string; corrigivel: boolean }>
+  } | null>(null)
+  const [verificando, setVerificando] = useState(false)
+  const [consertando, setConsertando] = useState(false)
 
   const carregar = useCallback(() => {
     setCarregando(true)
@@ -61,6 +67,57 @@ export default function RecorrenciasModal({ mesSelecionado, contas, onClose, onC
 
   useEffect(() => { carregar() }, [carregar])
   useEffect(() => { carregarDuplicadas() }, [carregarDuplicadas])
+
+  const verificarEspelhos = async () => {
+    setVerificando(true)
+    try {
+      const res = await fetch('/api/espelhos/diagnostico')
+      const d = await res.json().catch(() => null)
+      if (!res.ok || !d) {
+        onAviso('Não foi possível verificar os espelhos.')
+        return
+      }
+      setDiag({ resumo: d.resumo, problemas: d.problemas ?? [] })
+      if ((d.resumo?.erros ?? 0) === 0) onAviso('Espelhos da casa: tudo certo.')
+    } catch {
+      onAviso('Sem conexão. Verifique sua internet.')
+    } finally {
+      setVerificando(false)
+    }
+  }
+
+  const consertarEspelhos = async () => {
+    if (!confirm('Consertar os espelhos da casa?\n\nCópias que faltam são criadas, as que estão na conta errada voltam para a casa e as duplicadas/orfãs são removidas. Nenhum lançamento seu é apagado.')) return
+    setConsertando(true)
+    try {
+      const res = await fetch('/api/espelhos/diagnostico', { method: 'POST' })
+      const d = await res.json().catch(() => ({})) as {
+        message?: string
+        resultado?: { criados: number; movidos: number; apagados: number; falhas: number }
+        depois?: { erros: number; avisos: number }
+      }
+      if (!res.ok) {
+        onAviso(d.message ?? 'Não foi possível consertar.')
+        return
+      }
+      const r = d.resultado
+      if (r) {
+        const partes = [
+          r.criados > 0 ? `${r.criados} criada(s)` : '',
+          r.movidos > 0 ? `${r.movidos} movida(s)` : '',
+          r.apagados > 0 ? `${r.apagados} removida(s)` : '',
+        ].filter(Boolean)
+        onAviso(partes.length > 0 ? `Espelhos consertados: ${partes.join(', ')}.` : 'Nada para consertar.')
+      }
+      await verificarEspelhos()
+      carregar()
+      onChanged()
+    } catch {
+      onAviso('Sem conexão. Verifique sua internet.')
+    } finally {
+      setConsertando(false)
+    }
+  }
 
   const juntar = async (grupo: Duplicada) => {
     const total = grupo.outras.length + 1
@@ -200,6 +257,54 @@ export default function RecorrenciasModal({ mesSelecionado, contas, onClose, onC
             </div>
           )
         })}
+
+        {/* Espelhos da casa: verifica e conserta */}
+        <div className="rounded-2xl border border-[rgba(45,42,38,0.12)] dark:border-[rgba(255,255,255,0.07)] bg-[#FAF6F1] dark:bg-[#3E3935] p-3 space-y-2">
+          <div className="flex items-start gap-2">
+            <Stethoscope size={14} className="text-[#8FB39A] mt-0.5 shrink-0" />
+            <div className="min-w-0">
+              <p className="text-xs font-bold text-[#2D2A26] dark:text-[#E8E0D5]">Espelhos da casa</p>
+              <p className="text-[10px] text-[#8C857C] dark:text-[#9E9890] leading-relaxed">
+                Confere se toda despesa marcada como “da casa” está mesmo aparecendo lá.
+              </p>
+            </div>
+          </div>
+
+          <div className="flex gap-2">
+            <button
+              onClick={verificarEspelhos}
+              disabled={verificando || consertando}
+              className="flex-1 inline-flex items-center justify-center gap-1.5 text-[11px] font-bold text-[#2D2A26] dark:text-[#E8E0D5] bg-white dark:bg-[#2B2825] border border-[rgba(45,42,38,0.12)] dark:border-[rgba(255,255,255,0.07)] rounded-full px-3 py-2 active:scale-95 disabled:opacity-60 transition"
+            >
+              {verificando ? <Loader2 size={11} className="animate-spin" /> : <Stethoscope size={11} />} Verificar
+            </button>
+            <button
+              onClick={consertarEspelhos}
+              disabled={consertando || verificando}
+              className="flex-1 inline-flex items-center justify-center gap-1.5 text-[11px] font-bold text-white bg-[#8FB39A] rounded-full px-3 py-2 active:scale-95 disabled:opacity-60 transition"
+            >
+              {consertando ? <Loader2 size={11} className="animate-spin" /> : <Wrench size={11} />} Consertar
+            </button>
+          </div>
+
+          {diag && (
+            <div className="space-y-1.5 pt-1">
+              {diag.problemas.length === 0 && (
+                <p className="text-[11px] text-[#5f8a6d] dark:text-[#8FB39A] font-semibold">
+                  ✓ Tudo certo: os espelhos estão no lugar.
+                </p>
+              )}
+              {diag.problemas.map((p, i) => (
+                <div key={`${p.tipo}-${i}`} className="rounded-xl bg-white dark:bg-[#2B2825] px-2.5 py-2">
+                  <p className={`text-[11px] font-bold ${p.corrigivel ? 'text-[#D4A0A0]' : 'text-[#E8A87C]'}`}>
+                    {p.titulo}
+                  </p>
+                  <p className="text-[10px] text-[#8C857C] dark:text-[#9E9890] leading-relaxed">{p.detalhe}</p>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
 
         {duplicadas.length > 0 && (
           <div className="space-y-2 pt-1">
