@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/db'
 import { items, contas, contaMembers, users } from '@/db/schemas/schema'
-import { eq, desc, and, inArray, or } from 'drizzle-orm'
+import { eq, desc, and, inArray, or, sql } from 'drizzle-orm'
 import { getAuthContext } from '@/lib/auth'
 import { criarRecorrencia, sincronizarRecorrencias, migrarRecorrentesLegados } from '@/lib/recorrencia-db'
 import {
@@ -9,7 +9,9 @@ import {
   definirEspelhoDaSerie,
   ensureEspelhoSchema,
   mapaEspelhos,
+  repararEspelhosFaltantes,
 } from '@/lib/espelho-db'
+import { recorrencias } from '@/db/schemas/schema'
 import { z } from 'zod'
 
 const itemSchema = z.object({
@@ -107,6 +109,8 @@ export async function GET(req: NextRequest) {
   if (mes && !todos) {
     await migrarRecorrentesLegados(ctx.user.id)
     await sincronizarRecorrencias(ctx.user.id, mes)
+    // E conserta espelhos que ficaram faltando (série marcada sem cópia).
+    await repararEspelhosFaltantes(ctx.user.id)
   }
 
   const acessiveis = await getContasAcessiveis(ctx.user.id)
@@ -159,6 +163,30 @@ export async function POST(req: NextRequest) {
   const series: Array<{ id: string; descricao: string; mesFim: string | null; geradas: number }> = []
   let geradas = 0
 
+  // Fixa duplicada: mesma descrição na mesma conta já tem série ativa.
+  // Antes isso criava duas séries iguais e o espelho ia só para uma delas.
+  for (const d of fixas) {
+    const [jaExiste] = await db
+      .select({ id: recorrencias.id, mesInicio: recorrencias.mesInicio })
+      .from(recorrencias)
+      .where(and(
+        eq(recorrencias.userId, ctx.user.id),
+        eq(recorrencias.ativa, true),
+        sql`lower(${recorrencias.descricao}) = lower(${d.descricao})`,
+        d.contaId ? eq(recorrencias.contaId, d.contaId) : sql`${recorrencias.contaId} IS NULL`,
+      ))
+      .limit(1)
+
+    if (jaExiste) {
+      return NextResponse.json({
+        error: 'FIXA_DUPLICADA',
+        recorrenciaId: jaExiste.id,
+        mesInicio: jaExiste.mesInicio,
+        message: `Já existe a despesa fixa "${d.descricao}" nesta conta, desde ${jaExiste.mesInicio}. Encerre a antiga na aba Fixas antes de criar outra.`,
+      }, { status: 409 })
+    }
+  }
+
   for (const d of fixas) {
     const resultado = await criarRecorrencia({
       userId: ctx.user.id,
@@ -173,8 +201,23 @@ export async function POST(req: NextRequest) {
     if (resultado.primeiroItem) inseridos.push(resultado.primeiroItem)
     geradas += resultado.geradas
     // Despesa fixa marcada como "da casa": espelha a série inteira.
+    // Se o espelho falhar, desfaz a série inteira: melhor não criar nada do
+    // que deixar a fixa pela metade (era o bug de "criei e não espelhou").
     if (d.espelharNaContaId) {
-      await definirEspelhoDaSerie(resultado.recorrencia.id, d.espelharNaContaId)
+      try {
+        const criados = await definirEspelhoDaSerie(resultado.recorrencia.id, d.espelharNaContaId)
+        if (criados === 0 && resultado.primeiroItem) {
+          await criarEspelhoDoItem(resultado.primeiroItem, d.espelharNaContaId)
+        }
+      } catch (err) {
+        console.error('espelho da série falhou, desfazendo', err)
+        await db.delete(items).where(eq(items.recorrenciaId, resultado.recorrencia.id))
+        await db.delete(recorrencias).where(eq(recorrencias.id, resultado.recorrencia.id))
+        return NextResponse.json({
+          error: 'ESPELHO_FALHOU',
+          message: 'Não foi possível espelhar na conta da casa. Nada foi salvo — tente de novo.',
+        }, { status: 500 })
+      }
     }
     series.push({
       id: resultado.recorrencia.id,
@@ -203,7 +246,17 @@ export async function POST(req: NextRequest) {
     // Lançamentos avulsos marcados como "da casa": cria a cópia na casa.
     for (let i = 0; i < inserted.length; i++) {
       const destino = avulsos[i]?.espelharNaContaId
-      if (destino) await criarEspelhoDoItem(inserted[i], destino)
+      if (!destino) continue
+      try {
+        await criarEspelhoDoItem(inserted[i], destino)
+      } catch (err) {
+        console.error('espelho do lançamento falhou, desfazendo o lote', err)
+        await db.delete(items).where(inArray(items.id, inserted.map(r => r.id)))
+        return NextResponse.json({
+          error: 'ESPELHO_FALHOU',
+          message: 'Não foi possível espelhar na conta da casa. Nada foi salvo — tente de novo.',
+        }, { status: 500 })
+      }
     }
   }
 

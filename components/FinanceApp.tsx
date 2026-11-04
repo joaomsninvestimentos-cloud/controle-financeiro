@@ -15,6 +15,14 @@ import RecorrenciasModal from './RecorrenciasModal'
 import ContaSwitcher from './ContaSwitcher'
 import EditarContaModal from './EditarContaModal'
 import { normalizarRotuloSoma, resolverSelecao, ROTULO_SOMA } from '@/lib/contas-logic'
+import {
+  deveAtualizarAoSoltar,
+  deveRecarregarAoVoltar,
+  deslocamentoIndicador,
+  estadoPull,
+  opacidadeIndicador,
+  podePuxar,
+} from '@/lib/pull-refresh-logic'
 import OrcamentosView from './OrcamentosView'
 import ChatAssistant from './ChatAssistant'
 import { useTheme } from './ThemeProvider'
@@ -216,6 +224,13 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
   // Rótulo/visibilidade da visão somada: preferência do aparelho (não é conta).
   const [rotuloSoma, setRotuloSoma] = useState(ROTULO_SOMA)
   const [somaVisivel, setSomaVisivel] = useState(true)
+  // Puxar para atualizar
+  const [refreshKey, setRefreshKey] = useState(0)
+  const [pullDistancia, setPullDistancia] = useState(0)
+  const [atualizando, setAtualizando] = useState(false)
+  const pullInicio = useRef<number | null>(null)
+  const pullDistanciaRef = useRef(0)
+  const ultimaRecarga = useRef<number>(Date.now())
   const [modoLote, setModoLote] = useState(false)
   const [lote, setLote] = useState<Array<{
     descricao:string;valor:string;tipo:Tipo;categoria:string;data:string;contaId:string;
@@ -309,7 +324,7 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
       .then(r => r.json())
       .then(d => setOrcamentos(d.orcamentos ?? []))
       .catch(() => {})
-  }, [mesSelecionado])
+  }, [mesSelecionado, refreshKey])
 
   // Carregar TODOS os items (carry-forward)
   const carregarTodosItems = useCallback(() => {
@@ -322,7 +337,7 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
       .catch(() => {})
   }, [contaSelecionada])
 
-  useEffect(() => { carregarTodosItems() }, [carregarTodosItems])
+  useEffect(() => { carregarTodosItems() }, [carregarTodosItems, refreshKey])
 
   // Carregar items do mês selecionado
   useEffect(() => {
@@ -338,7 +353,7 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
         setLoading(false)
       })
       .catch(() => setLoading(false))
-  }, [mesSelecionado, contaSelecionada])
+  }, [mesSelecionado, contaSelecionada, refreshKey])
 
   useEffect(() => {
     setCategoria(tipo === 'despesa' ? 'Alimentação' : 'Salário')
@@ -366,6 +381,83 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
       saldo = calc.saldoFim
     }
   }
+
+  // ── Atualizar (puxar para baixo / voltar ao app) ───────────────────────────
+  const recarregarTudo = useCallback(() => {
+    setRefreshKey(k => k + 1)
+    carregarContas()
+    carregarTodosItems()
+    ultimaRecarga.current = Date.now()
+  }, [carregarContas, carregarTodosItems])
+
+  const finalizarAtualizacao = useCallback(() => {
+    setPullDistancia(0)
+    pullDistanciaRef.current = 0
+    // pequena pausa para o indicador não "piscar" na tela
+    setTimeout(() => setAtualizando(false), 450)
+  }, [])
+
+  useEffect(() => {
+    const aoComecar = (e: TouchEvent) => {
+      if (!podePuxar(window.scrollY, atualizando)) return
+      pullInicio.current = e.touches[0].clientY
+    }
+
+    const aoMover = (e: TouchEvent) => {
+      if (pullInicio.current === null || atualizando) return
+      const bruto = e.touches[0].clientY - pullInicio.current
+      if (bruto <= 0) {
+        pullDistanciaRef.current = 0
+        setPullDistancia(0)
+        return
+      }
+      // no topo: segura o gesto para não rolar a página junto
+      if (window.scrollY <= 0 && bruto > 6 && e.cancelable) e.preventDefault()
+      const distancia = estadoPull(bruto, false).distancia
+      pullDistanciaRef.current = distancia
+      setPullDistancia(distancia)
+    }
+
+    const aoSoltar = () => {
+      if (pullInicio.current === null) return
+      const distancia = pullDistanciaRef.current
+      pullInicio.current = null
+      pullDistanciaRef.current = 0
+      if (deveAtualizarAoSoltar(distancia, atualizando)) {
+        setAtualizando(true)
+        recarregarTudo()
+        finalizarAtualizacao()
+      } else {
+        setPullDistancia(0)
+      }
+    }
+
+    window.addEventListener('touchstart', aoComecar, { passive: true })
+    window.addEventListener('touchmove', aoMover, { passive: false })
+    window.addEventListener('touchend', aoSoltar)
+    window.addEventListener('touchcancel', aoSoltar)
+    return () => {
+      window.removeEventListener('touchstart', aoComecar)
+      window.removeEventListener('touchmove', aoMover)
+      window.removeEventListener('touchend', aoSoltar)
+      window.removeEventListener('touchcancel', aoSoltar)
+    }
+  }, [atualizando, recarregarTudo, finalizarAtualizacao])
+
+  // Voltou para o app (troca de aba, desbloqueio)? Recarrega se faz tempo.
+  useEffect(() => {
+    const aoVoltar = () => {
+      if (document.visibilityState !== 'visible') return
+      if (!deveRecarregarAoVoltar(ultimaRecarga.current, Date.now())) return
+      recarregarTudo()
+    }
+    document.addEventListener('visibilitychange', aoVoltar)
+    window.addEventListener('focus', aoVoltar)
+    return () => {
+      document.removeEventListener('visibilitychange', aoVoltar)
+      window.removeEventListener('focus', aoVoltar)
+    }
+  }, [recarregarTudo])
 
   // ── Espelho da casa ───────────────────────────────────────────────────────
   const contaCasa = contas.find(c => c.tipo === 'casa') ?? null
@@ -421,7 +513,8 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
         setRecorrenteAte('')
         setTambemDaCasa(false)
       } else {
-        mostrarErro('Não foi possível salvar. Tente novamente.')
+        const dados = await res.json().catch(() => ({})) as { error?: string; message?: string }
+        mostrarErro(dados.message ?? 'Não foi possível salvar. Tente novamente.')
       }
     } catch {
       mostrarErro('Sem conexão. Verifique sua internet.')
@@ -561,9 +654,11 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
       setItems(prev => prev.map(i => i.id === id ? { ...i, ...item } : i))
       setTodosItems(prev => prev.map(i => i.id === id ? { ...i, ...item } : i))
       carregarTodosItems()
-    } else {
-      mostrarErro('Não foi possível salvar a edição.')
+      return
     }
+    const dados = await res.json().catch(() => ({})) as { message?: string }
+    mostrarErro(dados.message ?? 'Não foi possível salvar a edição.')
+    throw new Error(dados.message ?? 'FALHA')
   }, [mostrarErro, carregarTodosItems])
 
   // ── Remover ──────────────────────────────────────────────────────────────
@@ -691,6 +786,23 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
           </button>
         </div>
       </header>
+
+      {/* Indicador do "puxar para atualizar" */}
+      {(pullDistancia > 0 || atualizando) && (
+        <div
+          className="fixed left-1/2 -translate-x-1/2 z-[70] pointer-events-none transition-opacity"
+          style={{
+            top: `calc(env(safe-area-inset-top) + ${deslocamentoIndicador(pullDistancia, atualizando)}px)`,
+            opacity: opacidadeIndicador(pullDistancia, atualizando),
+          }}
+          aria-live="polite"
+        >
+          <div className="flex items-center gap-1.5 bg-white dark:bg-[#342F2B] text-[#8C857C] dark:text-[#9E9890] text-[11px] font-bold rounded-full px-3 py-1.5 shadow-snug">
+            <Loader2 size={12} className={`text-[#8FB39A] ${atualizando ? 'animate-spin' : ''}`} />
+            {estadoPull(pullDistancia, atualizando).rotulo}
+          </div>
+        </div>
+      )}
 
       <div className="max-w-2xl mx-auto px-4 pt-5 space-y-4 text-[#2D2A26] dark:text-[#E8E0D5]">
         {erro && (
@@ -1223,9 +1335,14 @@ function ItemCard({ item, contas, currentUser, contaSelecionada, onRemover, onEd
         campos.espelharNaContaId = querEspelhar ? (contaCasa?.id ?? null) : null
       }
     }
-    await onEditar(item.id, campos)
-    setSalvando(false)
-    setEditando(false)
+    try {
+      await onEditar(item.id, campos)
+      setEditando(false)
+    } catch {
+      // erro já foi mostrado ao usuário; mantém a edição aberta para corrigir
+    } finally {
+      setSalvando(false)
+    }
   }
 
   const cancelar = () => {

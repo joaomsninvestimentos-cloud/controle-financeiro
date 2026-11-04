@@ -192,3 +192,45 @@ export async function espelharOcorrenciasNovas(recorrenciaId: string, contaDesti
   }
   return criados
 }
+
+/**
+ * Auto-reparo: cria os espelhos que faltam para as séries marcadas com
+ * `espelhar_conta_id`. Cobre o caso em que a série foi criada mas a cópia não
+ * (falha no meio do caminho, versão antiga do app, criação manual etc.).
+ * Idempotente e barato: só olha séries que pedem espelho.
+ */
+export async function repararEspelhosFaltantes(userId: string): Promise<number> {
+  await ensureEspelhoSchema()
+
+  const series = await db
+    .select({ id: recorrencias.id, contaDestino: recorrencias.espelharContaId })
+    .from(recorrencias)
+    .where(and(
+      eq(recorrencias.userId, userId),
+      eq(recorrencias.ativa, true),
+      sql`${recorrencias.espelharContaId} IS NOT NULL`,
+    ))
+
+  let criados = 0
+  for (const serie of series) {
+    if (!serie.contaDestino) continue
+    criados += await espelharOcorrenciasNovas(serie.id, serie.contaDestino)
+  }
+  return criados
+}
+
+/**
+ * Auto-reparo para lançamentos avulsos: qualquer item do usuário que esteja
+ * marcado em `alvoPorItem` mas ainda não tenha cópia ganha a cópia agora.
+ */
+export async function garantirEspelhoDoItem(item: ItemRow, contaDestinoId: string): Promise<boolean> {
+  await ensureEspelhoSchema()
+  const [existente] = await db
+    .select({ id: items.id })
+    .from(items)
+    .where(eq(items.espelhoDe, item.id))
+    .limit(1)
+  if (existente) return false
+  const criado = await criarEspelhoDoItem(item, contaDestinoId)
+  return !!criado
+}
