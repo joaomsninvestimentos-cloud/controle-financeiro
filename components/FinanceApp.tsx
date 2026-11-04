@@ -15,6 +15,14 @@ import RecorrenciasModal from './RecorrenciasModal'
 import ContaSwitcher from './ContaSwitcher'
 import EditarContaModal from './EditarContaModal'
 import { normalizarRotuloSoma, resolverSelecao, ROTULO_SOMA } from '@/lib/contas-logic'
+import {
+  chaveMarcas,
+  marcasVisiveis,
+  normalizarMarca,
+  registrarMarca,
+  resumoMovidos,
+  type MarcaMovido,
+} from '@/lib/movidos-logic'
 import OrcamentosView from './OrcamentosView'
 import ChatAssistant from './ChatAssistant'
 import { useTheme } from './ThemeProvider'
@@ -217,6 +225,8 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
   const [erro, setErro] = useState('')
   const [installPrompt, setInstallPrompt] = useState<{ prompt: () => Promise<void> } | null>(null)
   const erroTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [marcas, setMarcas] = useState<MarcaMovido[]>([])
+  const [marcasListas, setMarcasListas] = useState(false)
 
   const mostrarErro = useCallback((msg: string) => {
     setErro(msg)
@@ -509,8 +519,26 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
     URL.revokeObjectURL(url)
   }, [items, contas, mesSelecionado])
 
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(chaveMarcas)
+      setMarcas(normalizarMarca(raw ? JSON.parse(raw) : []))
+    } catch {
+      setMarcas([])
+    }
+    setMarcasListas(true)
+  }, [])
+
+  useEffect(() => {
+    if (!marcasListas) return
+    try {
+      localStorage.setItem(chaveMarcas, JSON.stringify(marcas))
+    } catch { /* modo privado */ }
+  }, [marcas, marcasListas])
+
   // ── Editar ───────────────────────────────────────────────────────────────
   const editarItem = useCallback(async (id: string, campos: Partial<Pick<Item, 'descricao'|'valor'|'categoria'|'data'|'contaId'|'recorrente'>>) => {
+    const anterior = items.find(i => i.id === id) ?? todosItems.find(i => i.id === id)
     const res = await fetch(`/api/items/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -520,10 +548,23 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
       const { item } = await res.json()
       setItems(prev => prev.map(i => i.id === id ? { ...i, ...item } : i))
       setTodosItems(prev => prev.map(i => i.id === id ? { ...i, ...item } : i))
+      const novaContaId = campos.contaId
+      if (novaContaId && novaContaId !== anterior?.contaId) {
+        const destino = contas.find(c => c.id === novaContaId)
+        if (destino) {
+          const agora = Date.now()
+          setMarcas(prev => registrarMarca(prev, {
+            itemId: id,
+            destinoNome: destino.nome,
+            destinoId: destino.id,
+            em: agora,
+          }, agora))
+        }
+      }
     } else {
       mostrarErro('Não foi possível salvar a edição.')
     }
-  }, [mostrarErro])
+  }, [mostrarErro, items, todosItems, contas])
 
   // ── Remover ──────────────────────────────────────────────────────────────
   const removerItem = useCallback(async (id: string) => {
@@ -578,6 +619,10 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
     router.push('/login')
     router.refresh()
   }
+
+  const agoraMarcas = Date.now()
+  const mapaMarcas = marcasVisiveis(marcas, agoraMarcas)
+  const resumoMarcas = resumoMovidos(marcas, agoraMarcas)
 
   const categorias = tipo === 'despesa' ? CATEGORIAS_DESPESA : CATEGORIAS_RECEITA
   const q = busca.trim().toLowerCase()
@@ -949,20 +994,34 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
                 className="w-full rounded-2xl border border-[rgba(45,42,38,0.12)] dark:border-[rgba(255,255,255,0.07)] bg-white dark:bg-[#342F2B] pl-10 pr-4 py-3 text-sm text-[#2D2A26] dark:text-[#E8E0D5] placeholder-[#8C857C] outline-none focus:ring-2 focus:ring-[#8FB39A]/50 shadow-snug"
               />
             </div>
+            {resumoMarcas.total > 0 && (
+              <div className="flex items-center justify-between px-1">
+                <span className="text-xs text-[#8FB39A] font-semibold flex items-center gap-1">
+                  <Check size={12} /> {resumoMarcas.total} movido{resumoMarcas.total === 1 ? '' : 's'}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setMarcas([])}
+                  className="text-[10px] text-[#8C857C] hover:text-[#D4A0A0] font-semibold transition"
+                >
+                  limpar
+                </button>
+              </div>
+            )}
             {q && itemsFiltrados.length === 0 && (
               <p className="text-center text-sm text-[#8C857C] py-6">Nenhum lançamento para “{busca}”.</p>
             )}
             {itemsFiltrados.filter(i=>i.tipo==='receita').length>0&&(
               <Section titulo="💰 Receitas">
                 {itemsFiltrados.filter(i=>i.tipo==='receita').map(i=>(
-                  <ItemCard key={i.id} item={i} contas={contas} currentUser={user} contaSelecionada={contaSelecionada} onRemover={removerItem} onEditar={editarItem}/>
+                  <ItemCard key={i.id} item={i} contas={contas} currentUser={user} contaSelecionada={contaSelecionada} onRemover={removerItem} onEditar={editarItem} marca={mapaMarcas.get(i.id)}/>
                 ))}
               </Section>
             )}
             {itemsFiltrados.filter(i=>i.tipo==='despesa').length>0&&(
               <Section titulo="💸 Despesas">
                 {itemsFiltrados.filter(i=>i.tipo==='despesa').map(i=>(
-                  <ItemCard key={i.id} item={i} contas={contas} currentUser={user} contaSelecionada={contaSelecionada} onRemover={removerItem} onEditar={editarItem}/>
+                  <ItemCard key={i.id} item={i} contas={contas} currentUser={user} contaSelecionada={contaSelecionada} onRemover={removerItem} onEditar={editarItem} marca={mapaMarcas.get(i.id)}/>
                 ))}
               </Section>
             )}
@@ -1101,9 +1160,10 @@ interface ItemCardProps {
   contaSelecionada: string | 'tudo'
   onRemover: (id: string) => void
   onEditar: (id: string, c: Partial<Pick<Item,'descricao'|'valor'|'categoria'|'data'|'contaId'|'recorrente'>>) => Promise<void>
+  marca?: MarcaMovido
 }
 
-function ItemCard({ item, contas, currentUser, contaSelecionada, onRemover, onEditar }: ItemCardProps) {
+function ItemCard({ item, contas, currentUser, onRemover, onEditar, marca }: ItemCardProps) {
   const cor = CORES[item.categoria]??'#C4C4C4'
   const conta = contas.find(c => c.id === item.contaId)
   const [editando, setEditando] = useState(false)
@@ -1208,6 +1268,11 @@ function ItemCard({ item, contas, currentUser, contaSelecionada, onRemover, onEd
         <div className="flex-1 min-w-0">
           <p className="text-[#2D2A26] dark:text-[#E8E0D5] text-sm font-semibold truncate">
             {item.descricao}
+            {marca && (
+              <span className="ml-1.5 inline-flex items-center gap-0.5 text-[10px] text-[#8FB39A] font-semibold align-middle" title={`Movido para ${marca.destinoNome}`}>
+                <Check size={10} /> → {marca.destinoNome}
+              </span>
+            )}
             {item.recorrenciaId ? (
               <span className="ml-1.5 text-[10px] text-[#8FB39A] bg-[#8FB39A]/15 rounded-full px-1.5 py-0.5" title="Despesa fixa — repete todo mês">🔁 fixa</span>
             ) : item.recorrente ? (
