@@ -217,7 +217,10 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
   const [rotuloSoma, setRotuloSoma] = useState(ROTULO_SOMA)
   const [somaVisivel, setSomaVisivel] = useState(true)
   const [modoLote, setModoLote] = useState(false)
-  const [lote, setLote] = useState<Array<{descricao:string;valor:string;tipo:Tipo;categoria:string;data:string;contaId:string;recorrente:boolean}>>([])
+  const [lote, setLote] = useState<Array<{
+    descricao:string;valor:string;tipo:Tipo;categoria:string;data:string;contaId:string;
+    recorrente:boolean; espelharNaContaId?: string | null;
+  }>>([])
   const [busca, setBusca] = useState('')
   const [erro, setErro] = useState('')
   const [installPrompt, setInstallPrompt] = useState<{ prompt: () => Promise<void> } | null>(null)
@@ -432,16 +435,23 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
     setLote(prev => [...prev, {
       descricao: descricao.trim(), valor: valor.toFixed(2),
       tipo, categoria, data, contaId: itemContaId, recorrente,
+      ...(podeMarcarCasa && tambemDaCasa && contaCasa ? { espelharNaContaId: contaCasa.id } : {}),
     }])
     setDescricao('')
     setValorTexto('')
+    setTambemDaCasa(false)
   }
 
   const enviarLote = useCallback(async () => {
     if (lote.length === 0) return
     setSaving(true)
     try {
-      const payload = lote.map(l => ({ ...l, mes: l.data.slice(0, 7), contaId: l.contaId || null }))
+      const payload = lote.map(l => ({
+        ...l,
+        mes: l.data.slice(0, 7),
+        contaId: l.contaId || null,
+        ...(l.espelharNaContaId ? { espelharNaContaId: l.espelharNaContaId } : {}),
+      }))
       const res = await fetch('/api/items', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -451,6 +461,10 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
         const { items: novos } = await res.json()
         setItems(prev => [...novos.filter((i: Item) => i.mes === mesSelecionado), ...prev])
         setTodosItems(prev => [...novos, ...prev])
+        const espelhados = lote.filter(l => l.espelharNaContaId).length
+        if (espelhados > 0 && contaCasa) {
+          mostrarAviso(`${espelhados} lançamento(s) também na ${contaCasa.nome}.`)
+        }
         setLote([])
         setModoLote(false)
       } else {
@@ -459,7 +473,7 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
     } catch {
       mostrarErro('Sem conexão. Verifique sua internet.')
     } finally { setSaving(false) }
-  }, [lote, mesSelecionado, mostrarErro])
+  }, [lote, mesSelecionado, mostrarErro, mostrarAviso, contaCasa])
 
   // ── Notificações de orçamento ────────────────────────────────────────────
   const solicitarNotificacoes = useCallback(async () => {

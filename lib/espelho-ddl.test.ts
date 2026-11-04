@@ -163,3 +163,51 @@ test('série marcada guarda a conta da casa para espelhar os meses futuros', asy
   )).rows
   assert.equal(depois.espelhar_conta_id, null)
 })
+
+test('lançamento avulso também pode ser espelhado (sem série)', async () => {
+  const db = await novoBanco()
+
+  const avulsa: ItemEspelhavel = {
+    id: 'mercado-1',
+    userId: 'u1',
+    contaId: 'pessoal-joao',
+    descricao: 'Mercado',
+    valor: '240.00',
+    tipo: 'despesa',
+    categoria: 'Alimentação',
+    data: '2026-11-12',
+    mes: '2026-11',
+    recorrente: false,
+    recorrenciaId: null,
+  }
+
+  const espelho = montarEspelho(avulsa, 'casa', 'mercado-espelho')
+
+  await db.query(
+    `INSERT INTO items (id, user_id, conta_id, descricao, valor, tipo, categoria, data, mes, recorrente, recorrencia_id, espelho_de)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+    [avulsa.id, avulsa.userId, avulsa.contaId, avulsa.descricao, avulsa.valor,
+     avulsa.tipo, avulsa.categoria, avulsa.data, avulsa.mes,
+     avulsa.recorrente, avulsa.recorrenciaId, null],
+  )
+  await db.query(
+    `INSERT INTO items (id, user_id, conta_id, descricao, valor, tipo, categoria, data, mes, recorrente, recorrencia_id, espelho_de)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+    [espelho.id, espelho.userId, espelho.contaId, espelho.descricao, espelho.valor,
+     espelho.tipo, espelho.categoria, espelho.data, espelho.mes,
+     espelho.recorrente, espelho.recorrenciaId, espelho.espelhoDe],
+  )
+
+  // Uma linha na conta pessoal, uma na casa — e o total geral conta uma vez.
+  const porConta = await db.query<{ conta_id: string; total: number }>(
+    'SELECT conta_id, count(*)::int AS total FROM items GROUP BY conta_id ORDER BY conta_id',
+  )
+  assert.deepEqual(porConta.rows, [
+    { conta_id: 'casa', total: 1 },
+    { conta_id: 'pessoal-joao', total: 1 },
+  ])
+
+  const total = somarSemEspelhos([avulsa, { ...espelho, espelhoDe: 'mercado-1' }])
+  assert.equal(total.despesas, 240)
+  assert.equal(total.espelhosIgnorados, 1)
+})
