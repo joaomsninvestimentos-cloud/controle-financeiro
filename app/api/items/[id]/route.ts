@@ -4,6 +4,13 @@ import { items, contas, contaMembers } from '@/db/schemas/schema'
 import { eq, and } from 'drizzle-orm'
 import { getAuthContext } from '@/lib/auth'
 import { criarRecorrencia, propagarEdicao, pularMes } from '@/lib/recorrencia-db'
+import {
+  criarEspelhoDoItem,
+  definirEspelhoDaSerie,
+  ensureEspelhoSchema,
+  removerEspelhosDoItem,
+  sincronizarLadoOposto,
+} from '@/lib/espelho-db'
 import { z } from 'zod'
 
 const patchSchema = z.object({
@@ -15,6 +22,8 @@ const patchSchema = z.object({
   mes: z.string().regex(/^\d{4}-\d{2}$/).optional(),
   contaId: z.string().nullable().optional(),
   recorrente: z.boolean().optional(),
+  // Espelho da casa: id da conta da casa (string) para ligar, null para desligar.
+  espelharNaContaId: z.string().nullable().optional(),
 })
 
 // Verifica se o usuário pode modificar o item:
@@ -32,8 +41,37 @@ async function canModify(userId: string, itemId: string): Promise<boolean> {
       .from(contas)
       .where(and(eq(contas.id, item.contaId), eq(contas.userId, userId)))
     if (conta) return true
+
+    // Membro ativo de uma conta da casa: pode editar o que está nela
+    // (inclui os espelhos de despesas pagas pelo outro).
+    const [membro] = await db
+      .select()
+      .from(contaMembers)
+      .where(and(
+        eq(contaMembers.contaId, item.contaId),
+        eq(contaMembers.userId, userId),
+        eq(contaMembers.status, 'active'),
+      ))
+    if (membro) return true
   }
   return false
+}
+
+/** A conta é uma conta da casa acessível ao usuário? */
+async function casaAcessivel(userId: string, contaId: string): Promise<boolean> {
+  const [conta] = await db.select().from(contas).where(eq(contas.id, contaId))
+  if (!conta || conta.tipo !== 'casa') return false
+  if (conta.userId === userId) return true
+
+  const [membro] = await db
+    .select()
+    .from(contaMembers)
+    .where(and(
+      eq(contaMembers.contaId, contaId),
+      eq(contaMembers.userId, userId),
+      eq(contaMembers.status, 'active'),
+    ))
+  return !!membro
 }
 
 export async function PATCH(
@@ -42,6 +80,8 @@ export async function PATCH(
 ) {
   const ctx = await getAuthContext()
   if (!ctx.authorized) return NextResponse.json({ error: 'UNAUTHORIZED' }, { status: 401 })
+
+  await ensureEspelhoSchema()
 
   const { id } = await params
   const ok = await canModify(ctx.user.id, id)
@@ -54,7 +94,9 @@ export async function PATCH(
   const [atual] = await db.select().from(items).where(eq(items.id, id))
   if (!atual) return NextResponse.json({ error: 'NOT_FOUND' }, { status: 404 })
 
-  const updates: Record<string, unknown> = { ...parsed.data }
+  const { espelharNaContaId: _espelho, ...camposItem } = parsed.data
+  void _espelho
+  const updates: Record<string, unknown> = { ...camposItem }
   if (parsed.data.data && !parsed.data.mes) {
     updates.mes = parsed.data.data.substring(0, 7)
   }
@@ -94,6 +136,30 @@ export async function PATCH(
 
   if (!updated) return NextResponse.json({ error: 'NOT_FOUND' }, { status: 404 })
 
+  // Liga/desliga o espelho na casa (antes de propagar, para pegar a série toda).
+  if (parsed.data.espelharNaContaId !== undefined) {
+    const destino = parsed.data.espelharNaContaId
+    if (destino) {
+      const ok = await casaAcessivel(ctx.user.id, destino)
+      if (!ok) return NextResponse.json({ error: 'ESPELHO_DESTINO_INVALIDO' }, { status: 400 })
+      if (atual.espelhoDe) return NextResponse.json({ error: 'JA_E_ESPELHO' }, { status: 400 })
+
+      if (atual.recorrenciaId) await definirEspelhoDaSerie(atual.recorrenciaId, destino)
+      else await criarEspelhoDoItem(updated, destino)
+    } else if (atual.recorrenciaId) {
+      await definirEspelhoDaSerie(atual.recorrenciaId, null)
+    } else {
+      await removerEspelhosDoItem(atual.id)
+    }
+  }
+
+  // Mantém o outro lado igual: origem ↔ espelho representam a mesma despesa.
+  if (!parsed.data.espelharNaContaId) {
+    const { espelharNaContaId: _ignorado, ...campos } = parsed.data
+    void _ignorado
+    await sincronizarLadoOposto(atual, campos)
+  }
+
   // Faz parte de uma despesa fixa: a edição vale deste mês em diante.
   if (atual.recorrenciaId && parsed.data.recorrente !== false) {
     await propagarEdicao(atual, {
@@ -116,6 +182,8 @@ export async function DELETE(
   const ctx = await getAuthContext()
   if (!ctx.authorized) return NextResponse.json({ error: 'UNAUTHORIZED' }, { status: 401 })
 
+  await ensureEspelhoSchema()
+
   const { id } = await params
   const ok = await canModify(ctx.user.id, id)
   if (!ok) return NextResponse.json({ error: 'FORBIDDEN' }, { status: 403 })
@@ -123,14 +191,26 @@ export async function DELETE(
   const [atual] = await db.select().from(items).where(eq(items.id, id))
   if (!atual) return NextResponse.json({ error: 'NOT_FOUND' }, { status: 404 })
 
+  // É um espelho: apagar aqui NÃO apaga o lançamento de quem pagou
+  // e NÃO pula o mês da série.
+  if (atual.espelhoDe) {
+    await db.delete(items).where(eq(items.id, id))
+    return NextResponse.json({ ok: true, eraEspelho: true, origemId: atual.espelhoDe })
+  }
+
+  // Origem com espelho: a cópia sai junto (senão ficaria órfã na casa).
+  const copiasRemovidas = await removerEspelhosDoItem(id)
+
   // Excluir a ocorrência de uma despesa fixa = pular aquele mês (não volta).
   if (atual.recorrenciaId) {
     const resultado = await pularMes(ctx.user.id, atual.recorrenciaId, atual.mes)
     if (!resultado) return NextResponse.json({ error: 'NOT_FOUND' }, { status: 404 })
-    return NextResponse.json({ ok: true, pulouMes: atual.mes, recorrenciaId: atual.recorrenciaId })
+    return NextResponse.json({
+      ok: true, pulouMes: atual.mes, recorrenciaId: atual.recorrenciaId, copiasRemovidas,
+    })
   }
 
   const deleted = await db.delete(items).where(eq(items.id, id)).returning()
   if (!deleted.length) return NextResponse.json({ error: 'NOT_FOUND' }, { status: 404 })
-  return NextResponse.json({ ok: true })
+  return NextResponse.json({ ok: true, copiasRemovidas })
 }

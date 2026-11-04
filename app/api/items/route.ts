@@ -4,6 +4,12 @@ import { items, contas, contaMembers, users } from '@/db/schemas/schema'
 import { eq, desc, and, inArray, or } from 'drizzle-orm'
 import { getAuthContext } from '@/lib/auth'
 import { criarRecorrencia, sincronizarRecorrencias, migrarRecorrentesLegados } from '@/lib/recorrencia-db'
+import {
+  criarEspelhoDoItem,
+  definirEspelhoDaSerie,
+  ensureEspelhoSchema,
+  mapaEspelhos,
+} from '@/lib/espelho-db'
 import { z } from 'zod'
 
 const itemSchema = z.object({
@@ -17,6 +23,8 @@ const itemSchema = z.object({
   recorrente: z.boolean().optional().default(false),
   // Despesa fixa: "repete até" opcional (YYYY-MM). Ausente = até encerrar.
   recorrenteAte: z.string().regex(/^\d{4}-\d{2}$/).nullable().optional(),
+  // Despesa da casa paga pela conta pessoal: cria a cópia espelhada na casa.
+  espelharNaContaId: z.string().nullable().optional(),
 })
 
 const bodySchema = z.union([itemSchema, z.array(itemSchema).min(1).max(50)])
@@ -33,7 +41,11 @@ async function getContasAcessiveis(userId: string): Promise<string[]> {
 // Enriches items with author name/email
 async function enrichItems(rows: typeof items.$inferSelect[]) {
   const userIds = [...new Set(rows.map(i => i.userId))]
-  if (userIds.length === 0) return rows.map(i => ({ ...i, autorNome: null, autorEmail: null }))
+  const espelhos = await mapaEspelhos(rows.map(i => i.id))
+  const comEspelho = (lista: Array<Record<string, unknown>>) =>
+    lista.map(i => ({ ...i, espelhadoNaContaId: espelhos.get(String(i.id)) ?? null }))
+
+  if (userIds.length === 0) return comEspelho(rows.map(i => ({ ...i, autorNome: null, autorEmail: null })))
 
   const autores = await db
     .select({ id: users.id, name: users.name, email: users.email })
@@ -42,16 +54,26 @@ async function enrichItems(rows: typeof items.$inferSelect[]) {
 
   const mapaAutores = Object.fromEntries(autores.map(u => [u.id, u]))
 
-  return rows.map(i => ({
+  return comEspelho(rows.map(i => ({
     ...i,
     autorNome: mapaAutores[i.userId]?.name ?? null,
     autorEmail: mapaAutores[i.userId]?.email ?? null,
-  }))
+  })))
+}
+
+/** A conta informada é uma conta da casa que o usuário acessa? */
+async function contaDaCasaAcessivel(userId: string, contaId: string): Promise<boolean> {
+  const acessiveis = await getContasAcessiveis(userId)
+  if (!acessiveis.includes(contaId)) return false
+  const [conta] = await db.select({ tipo: contas.tipo }).from(contas).where(eq(contas.id, contaId))
+  return conta?.tipo === 'casa'
 }
 
 export async function GET(req: NextRequest) {
   const ctx = await getAuthContext()
   if (!ctx.authorized) return NextResponse.json({ error: 'UNAUTHORIZED' }, { status: 401 })
+
+  await ensureEspelhoSchema()
 
   const { searchParams } = new URL(req.url)
   const mes = searchParams.get('mes')
@@ -108,6 +130,8 @@ export async function POST(req: NextRequest) {
   const ctx = await getAuthContext()
   if (!ctx.authorized) return NextResponse.json({ error: 'UNAUTHORIZED' }, { status: 401 })
 
+  await ensureEspelhoSchema()
+
   const body = await req.json()
   const parsed = bodySchema.safeParse(body)
   if (!parsed.success) return NextResponse.json({ error: 'INVALID_INPUT' }, { status: 400 })
@@ -119,6 +143,13 @@ export async function POST(req: NextRequest) {
     const acessiveis = await getContasAcessiveis(ctx.user.id)
     const bloqueadas = contaIds.filter(id => !acessiveis.includes(id))
     if (bloqueadas.length > 0) return NextResponse.json({ error: 'FORBIDDEN' }, { status: 403 })
+  }
+
+  // Destinos de espelho: precisam ser conta da casa acessível ao usuário.
+  for (const d of itemsToInsert) {
+    if (!d.espelharNaContaId) continue
+    const ok = await contaDaCasaAcessivel(ctx.user.id, d.espelharNaContaId)
+    if (!ok) return NextResponse.json({ error: 'ESPELHO_DESTINO_INVALIDO' }, { status: 400 })
   }
 
   const fixas = itemsToInsert.filter(d => d.recorrente)
@@ -141,6 +172,10 @@ export async function POST(req: NextRequest) {
     })
     if (resultado.primeiroItem) inseridos.push(resultado.primeiroItem)
     geradas += resultado.geradas
+    // Despesa fixa marcada como "da casa": espelha a série inteira.
+    if (d.espelharNaContaId) {
+      await definirEspelhoDaSerie(resultado.recorrencia.id, d.espelharNaContaId)
+    }
     series.push({
       id: resultado.recorrencia.id,
       descricao: resultado.recorrencia.descricao,
@@ -164,6 +199,12 @@ export async function POST(req: NextRequest) {
     }))
     const inserted = await db.insert(items).values(rows).returning()
     inseridos.push(...inserted)
+
+    // Lançamentos avulsos marcados como "da casa": cria a cópia na casa.
+    for (let i = 0; i < inserted.length; i++) {
+      const destino = avulsos[i]?.espelharNaContaId
+      if (destino) await criarEspelhoDoItem(inserted[i], destino)
+    }
   }
 
   const enriched = await enrichItems(inseridos)

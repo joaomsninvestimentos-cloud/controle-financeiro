@@ -85,6 +85,9 @@ export const items = pgTable('items', {
   mes: text('mes').notNull(),              // YYYY-MM
   recorrente: boolean('recorrente').notNull().default(false),
   recorrenciaId: text('recorrencia_id'),   // série de despesa fixa (nullable)
+  // Espelho de despesa: id do lançamento original (conta pessoal de quem pagou).
+  // Preenchido apenas na cópia que aparece na conta da casa.
+  espelhoDe: text('espelho_de'),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 })
 
@@ -103,6 +106,8 @@ export const recorrencias = pgTable('recorrencias', {
   dia: text('dia').notNull().default('1'), // dia do mês (string para manter padrão)
   mesInicio: text('mes_inicio').notNull(), // YYYY-MM
   mesFim: text('mes_fim'),                 // YYYY-MM (null = até encerrar)
+  // Conta da casa onde cada mês gerado deve ser espelhado (null = não espelha)
+  espelharContaId: text('espelhar_conta_id'),
   ativa: boolean('ativa').notNull().default(true),
   createdAt: timestamp('created_at').notNull().defaultNow(),
 })
