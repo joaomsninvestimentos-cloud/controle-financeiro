@@ -8,9 +8,12 @@ import {
   criarEspelhoDoItem,
   definirEspelhoDaSerie,
   ensureEspelhoSchema,
+  garantirEspelhoDoItem,
+  mapaEspelhos,
   removerEspelhosDoItem,
   sincronizarLadoOposto,
 } from '@/lib/espelho-db'
+import { recorrencias } from '@/db/schemas/schema'
 import { z } from 'zod'
 
 const patchSchema = z.object({
@@ -137,20 +140,53 @@ export async function PATCH(
   if (!updated) return NextResponse.json({ error: 'NOT_FOUND' }, { status: 404 })
 
   // Liga/desliga o espelho na casa (antes de propagar, para pegar a série toda).
+  // Nenhum caminho aqui é silencioso: se não der para espelhar, devolve erro.
   if (parsed.data.espelharNaContaId !== undefined) {
     const destino = parsed.data.espelharNaContaId
     if (destino) {
       const ok = await casaAcessivel(ctx.user.id, destino)
-      if (!ok) return NextResponse.json({ error: 'ESPELHO_DESTINO_INVALIDO' }, { status: 400 })
-      if (atual.espelhoDe) return NextResponse.json({ error: 'JA_E_ESPELHO' }, { status: 400 })
+      if (!ok) {
+        return NextResponse.json({
+          error: 'ESPELHO_DESTINO_INVALIDO',
+          message: 'Essa conta não é uma conta da casa que você participa.',
+        }, { status: 400 })
+      }
+      if (atual.espelhoDe) {
+        return NextResponse.json({
+          error: 'JA_E_ESPELHO',
+          message: 'Esta é uma cópia. Ligue o espelho no lançamento original.',
+        }, { status: 400 })
+      }
 
-      if (atual.recorrenciaId) await definirEspelhoDaSerie(atual.recorrenciaId, destino)
-      else await criarEspelhoDoItem(updated, destino)
+      try {
+        if (atual.recorrenciaId) {
+          const criados = await definirEspelhoDaSerie(atual.recorrenciaId, destino)
+          // Série sem ocorrências antigas? garante ao menos a deste mês.
+          if (criados === 0) await garantirEspelhoDoItem(updated, destino)
+        } else {
+          await criarEspelhoDoItem(updated, destino)
+        }
+      } catch (err) {
+        console.error('espelho (PATCH) falhou', err)
+        return NextResponse.json({
+          error: 'ESPELHO_FALHOU',
+          message: 'Não foi possível espelhar na conta da casa. Tente de novo.',
+        }, { status: 500 })
+      }
     } else if (atual.recorrenciaId) {
       await definirEspelhoDaSerie(atual.recorrenciaId, null)
     } else {
       await removerEspelhosDoItem(atual.id)
     }
+  }
+
+  // Auto-reparo: se a série pede espelho e a cópia desapareceu, recria.
+  if (atual.recorrenciaId) {
+    const [serie] = await db
+      .select({ destino: recorrencias.espelharContaId })
+      .from(recorrencias)
+      .where(eq(recorrencias.id, atual.recorrenciaId))
+    if (serie?.destino) await garantirEspelhoDoItem(updated, serie.destino)
   }
 
   // Mantém o outro lado igual: origem ↔ espelho representam a mesma despesa.
@@ -172,7 +208,11 @@ export async function PATCH(
     })
   }
 
-  return NextResponse.json({ item: updated, recorrenciaId: updated.recorrenciaId ?? null })
+  const espelhos = await mapaEspelhos([updated.id])
+  return NextResponse.json({
+    item: { ...updated, espelhadoNaContaId: espelhos.get(updated.id) ?? null },
+    recorrenciaId: updated.recorrenciaId ?? null,
+  })
 }
 
 export async function DELETE(
