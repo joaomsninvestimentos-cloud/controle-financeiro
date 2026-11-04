@@ -4,6 +4,7 @@ import { db } from '@/db'
 import { DDL_RECORRENCIA } from './recorrencia-ddl'
 import { items, contas, contaMembers, recorrencias, recorrenciaPulos } from '@/db/schemas/schema'
 import { and, eq, gt, inArray, or, sql, desc } from 'drizzle-orm'
+import { espelharOcorrenciasNovas } from './espelho-db'
 import {
   dataDaOcorrencia,
   diaDoMes,
@@ -216,7 +217,27 @@ export async function sincronizarRecorrencias(userId: string, mesSolicitado: str
 
   if (novos.length === 0) return []
 
-  return inserirLotes(novos)
+  const inseridos = await inserirLotes(novos)
+
+  // Séries marcadas como "despesa da casa": os meses novos nascem espelhados.
+  const destinoPorSerie = new Map(
+    series.filter(s => s.espelharContaId).map(s => [s.id, s.espelharContaId as string]),
+  )
+  for (const item of inseridos) {
+    const destino = item.recorrenciaId ? destinoPorSerie.get(item.recorrenciaId) : undefined
+    if (destino) await criarEspelhoSeguro(item, destino)
+  }
+
+  return inseridos
+}
+
+/** Espelha sem derrubar a sincronização se algo falhar no espelho. */
+async function criarEspelhoSeguro(item: ItemRow, destino: string) {
+  try {
+    await espelharOcorrenciasNovas(item.recorrenciaId as string, destino)
+  } catch (err) {
+    console.error('espelharOcorrenciasNovas falhou', err)
+  }
 }
 
 /** Insere em lotes para não estourar o limite de parâmetros do Postgres. */
@@ -449,7 +470,8 @@ export async function listarRecorrencias(userId: string): Promise<RecorrenciaRes
   const contagens = await db
     .select({ recorrenciaId: items.recorrenciaId, total: sql<number>`count(*)::int` })
     .from(items)
-    .where(inArray(items.recorrenciaId, ids))
+    // espelhos não contam como ocorrência da série (são cópias)
+    .where(and(inArray(items.recorrenciaId, ids), sql`${items.espelhoDe} IS NULL`))
     .groupBy(items.recorrenciaId)
 
   const totalPorSerie = new Map(contagens.map(c => [c.recorrenciaId, c.total]))

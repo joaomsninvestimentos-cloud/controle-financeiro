@@ -42,6 +42,10 @@ export interface Item {
   contaId: string | null
   recorrente: boolean
   recorrenciaId?: string | null
+  /** id do lançamento original (preenchido só no espelho da casa) */
+  espelhoDe?: string | null
+  /** conta da casa onde existe a cópia deste lançamento (se existir) */
+  espelhadoNaContaId?: string | null
   userId?: string
   createdAt?: string
   autorNome?: string | null
@@ -200,6 +204,7 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
   const [itemContaId, setItemContaId] = useState<string>('')
   const [recorrente, setRecorrente] = useState(false)
   const [recorrenteAte, setRecorrenteAte] = useState('')
+  const [tambemDaCasa, setTambemDaCasa] = useState(false)
   const [showFixas, setShowFixas] = useState(false)
   const [aviso, setAviso] = useState('')
   const avisoTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -323,7 +328,12 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
     if (contaSelecionada !== 'tudo') params.set('contaId', contaSelecionada)
     fetch(`/api/items?${params}`)
       .then(r => r.json())
-      .then(d => { setItems(d.items ?? []); setLoading(false) })
+      .then(d => {
+        const lista = (d.items ?? []) as Item[]
+        // Na visão somada o espelho não entra: ele já está contado na origem.
+        setItems(contaSelecionada === 'tudo' ? lista.filter(i => !i.espelhoDe) : lista)
+        setLoading(false)
+      })
       .catch(() => setLoading(false))
   }, [mesSelecionado, contaSelecionada])
 
@@ -354,6 +364,14 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
     }
   }
 
+  // ── Espelho da casa ───────────────────────────────────────────────────────
+  const contaCasa = contas.find(c => c.tipo === 'casa') ?? null
+  const contaDoItem = contas.find(c => c.id === itemContaId) ?? null
+  const podeMarcarCasa = tipo === 'despesa'
+    && !!contaCasa
+    && contaDoItem?.tipo === 'pessoal'
+    && contaDoItem.id !== contaCasa.id
+
   // Alerta: despesas > 80% receitas
   const alertaDespesas = totalReceitas > 0 && totalDespesas / totalReceitas >= 0.8
 
@@ -375,6 +393,7 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
           tipo, categoria, data, mes: mesItem,
           contaId: itemContaId || null, recorrente,
           ...(recorrente ? { recorrenteAte: recorrenteAte || null } : {}),
+          ...(podeMarcarCasa && tambemDaCasa && contaCasa ? { espelharNaContaId: contaCasa.id } : {}),
         }),
       })
       if (res.ok) {
@@ -390,17 +409,21 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
               : `Despesa fixa criada em "${item.descricao}".`,
           )
         }
+        if (podeMarcarCasa && tambemDaCasa && contaCasa) {
+          mostrarAviso(`Despesa também lançada na ${contaCasa.nome}.`)
+        }
         setDescricao('')
         setValorTexto('')
         setRecorrente(false)
         setRecorrenteAte('')
+        setTambemDaCasa(false)
       } else {
         mostrarErro('Não foi possível salvar. Tente novamente.')
       }
     } catch {
       mostrarErro('Sem conexão. Verifique sua internet.')
     } finally { setSaving(false) }
-  }, [descricao, valorTexto, tipo, categoria, data, itemContaId, recorrente, recorrenteAte, mesSelecionado, contaSelecionada, mostrarErro, mostrarAviso])
+  }, [descricao, valorTexto, tipo, categoria, data, itemContaId, recorrente, recorrenteAte, mesSelecionado, contaSelecionada, mostrarErro, mostrarAviso, podeMarcarCasa, tambemDaCasa, contaCasa])
 
   // ── Adicionar lote ────────────────────────────────────────────────────────
   const adicionarLoteAoCarrinho = () => {
@@ -510,7 +533,10 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
   }, [items, contas, mesSelecionado])
 
   // ── Editar ───────────────────────────────────────────────────────────────
-  const editarItem = useCallback(async (id: string, campos: Partial<Pick<Item, 'descricao'|'valor'|'categoria'|'data'|'contaId'|'recorrente'>>) => {
+  const editarItem = useCallback(async (
+    id: string,
+    campos: Partial<Pick<Item, 'descricao'|'valor'|'categoria'|'data'|'contaId'|'recorrente'>> & { espelharNaContaId?: string | null },
+  ) => {
     const res = await fetch(`/api/items/${id}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -520,17 +546,27 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
       const { item } = await res.json()
       setItems(prev => prev.map(i => i.id === id ? { ...i, ...item } : i))
       setTodosItems(prev => prev.map(i => i.id === id ? { ...i, ...item } : i))
+      carregarTodosItems()
     } else {
       mostrarErro('Não foi possível salvar a edição.')
     }
-  }, [mostrarErro])
+  }, [mostrarErro, carregarTodosItems])
 
   // ── Remover ──────────────────────────────────────────────────────────────
   const removerItem = useCallback(async (id: string) => {
     const alvo = items.find(i => i.id === id)
-    const pergunta = alvo?.recorrenciaId
-      ? `Pular "${alvo.descricao}" apenas em ${fmtMes(alvo.mes)}?\n\nA despesa fixa continua nos outros meses (para acabar de vez, use a aba Fixas).`
-      : 'Excluir este lançamento?'
+    let pergunta: string
+    if (alvo?.espelhoDe) {
+      const autor = alvo.autorNome?.split(' ')[0] ?? 'quem pagou'
+      pergunta = `Remover "${alvo.descricao}" da visão da casa?\n\nO lançamento de ${autor} continua na conta pessoal.`
+    } else if (alvo?.espelhadoNaContaId) {
+      const nome = contas.find(c => c.id === alvo.espelhadoNaContaId)?.nome ?? 'casa'
+      pergunta = `Excluir "${alvo.descricao}"?\n\nA cópia que aparece na ${nome} também será removida.`
+    } else if (alvo?.recorrenciaId) {
+      pergunta = `Pular "${alvo.descricao}" apenas em ${fmtMes(alvo.mes)}?\n\nA despesa fixa continua nos outros meses (para acabar de vez, use a aba Fixas).`
+    } else {
+      pergunta = 'Excluir este lançamento?'
+    }
     if (!confirm(pergunta)) return
     const snapshot = items
     const snapshotTodos = todosItems
@@ -541,8 +577,13 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
       setItems(snapshot)
       setTodosItems(snapshotTodos)
       mostrarErro('Não foi possível excluir.')
+      return
     }
-  }, [items, todosItems, mostrarErro])
+    // Espelho/origem mexem nos dois lados: recarrega para ficar fiel.
+    carregarTodosItems()
+    const dados = await res.json().catch(() => ({})) as { eraEspelho?: boolean }
+    if (dados.eraEspelho) mostrarAviso('Cópia removida da casa. O lançamento original continua.')
+  }, [items, todosItems, mostrarErro, mostrarAviso, carregarTodosItems, contas])
 
   // ── Editar / excluir conta (direto da barra) ──────────────────────────────
   const atualizarConta = useCallback(async (id: string, campos: { nome: string; cor: string; emoji: string }) => {
@@ -797,6 +838,19 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
               </div>
             </div>
           )}
+          {podeMarcarCasa && contaCasa && (
+            <label className="flex items-start gap-2 rounded-2xl border border-dashed border-[#8FB39A]/50 bg-[#8FB39A]/5 px-4 py-3 cursor-pointer mb-3">
+              <input type="checkbox" checked={tambemDaCasa} onChange={e=>setTambemDaCasa(e.target.checked)} className="w-4 h-4 accent-[#8FB39A] mt-0.5" />
+              <span className="text-sm text-[#2D2A26] dark:text-[#E8E0D5]">
+                🏠 Também é despesa da {contaCasa.nome}
+                <span className="flex flex-col text-[11px] text-[#8C857C] dark:text-[#9E9890]">
+                  <span>Fica na sua conta como o que você pagou, e aparece na {contaCasa.nome} para os dois.</span>
+                  <span>No total geral conta uma vez só.</span>
+                </span>
+              </span>
+            </label>
+          )}
+
           <label className="flex items-start gap-2 rounded-2xl border border-[rgba(45,42,38,0.12)] dark:border-[rgba(255,255,255,0.07)] bg-[#FAF6F1] dark:bg-[#3E3935] px-4 py-3 cursor-pointer mb-3">
             <input type="checkbox" checked={recorrente} onChange={e=>{setRecorrente(e.target.checked); if(!e.target.checked) setRecorrenteAte('')}} className="w-4 h-4 accent-[#8FB39A] mt-0.5" />
             <span className="text-sm text-[#2D2A26] dark:text-[#E8E0D5]">
@@ -1100,7 +1154,7 @@ interface ItemCardProps {
   currentUser: AuthUser
   contaSelecionada: string | 'tudo'
   onRemover: (id: string) => void
-  onEditar: (id: string, c: Partial<Pick<Item,'descricao'|'valor'|'categoria'|'data'|'contaId'|'recorrente'>>) => Promise<void>
+  onEditar: (id: string, c: Partial<Pick<Item,'descricao'|'valor'|'categoria'|'data'|'contaId'|'recorrente'>> & { espelharNaContaId?: string | null }) => Promise<void>
 }
 
 function ItemCard({ item, contas, currentUser, contaSelecionada, onRemover, onEditar }: ItemCardProps) {
@@ -1115,6 +1169,19 @@ function ItemCard({ item, contas, currentUser, contaSelecionada, onRemover, onEd
   const [novaContaId, setNovaContaId] = useState(item.contaId??'')
   const [novaRecorrencia, setNovaRecorrencia] = useState(item.recorrente)
   const [salvando, setSalvando] = useState(false)
+
+  // Espelho da casa (ver lib/espelho-logic).
+  const contaCasa = contas.find(c => c.tipo === 'casa') ?? null
+  const contaEscolhida = contas.find(c => c.id === novaContaId) ?? null
+  const ehEspelho = !!item.espelhoDe
+  const estaEspelhado = !!item.espelhadoNaContaId
+  const podeVirarEspelho = item.tipo === 'despesa'
+    && !!contaCasa
+    && contaEscolhida?.tipo === 'pessoal'
+    && contaEscolhida.id !== contaCasa.id
+    && !ehEspelho
+  const [vaiEspelhar, setVaiEspelhar] = useState(estaEspelhado)
+  const nomeContaEspelho = contas.find(c => c.id === (item.espelhadoNaContaId ?? ''))?.nome ?? null
 
   const categorias = item.tipo==='despesa' ? CATEGORIAS_DESPESA : CATEGORIAS_RECEITA
 
@@ -1132,7 +1199,17 @@ function ItemCard({ item, contas, currentUser, contaSelecionada, onRemover, onEd
     const valor = parsearValor(novoValor)
     if (!novaDesc.trim() || valor <= 0) return
     setSalvando(true)
-    await onEditar(item.id, { descricao: novaDesc.trim(), valor: valor.toFixed(2), categoria: novaCat, data: novaData, contaId: novaContaId||null, recorrente: novaRecorrencia })
+    const campos: Parameters<typeof onEditar>[1] = {
+      descricao: novaDesc.trim(), valor: valor.toFixed(2), categoria: novaCat,
+      data: novaData, contaId: novaContaId||null, recorrente: novaRecorrencia,
+    }
+    if (podeVirarEspelho) {
+      const querEspelhar = vaiEspelhar && !!contaCasa
+      if (querEspelhar !== estaEspelhado) {
+        campos.espelharNaContaId = querEspelhar ? (contaCasa?.id ?? null) : null
+      }
+    }
+    await onEditar(item.id, campos)
     setSalvando(false)
     setEditando(false)
   }
@@ -1144,6 +1221,7 @@ function ItemCard({ item, contas, currentUser, contaSelecionada, onRemover, onEd
     setNovaData(item.data)
     setNovaContaId(item.contaId??'')
     setNovaRecorrencia(item.recorrente)
+    setVaiEspelhar(estaEspelhado)
     setEditando(false)
   }
 
@@ -1185,6 +1263,17 @@ function ItemCard({ item, contas, currentUser, contaSelecionada, onRemover, onEd
             </span>
           </span>
         </label>
+        {podeVirarEspelho && contaCasa && (
+          <label className="flex items-start gap-2 text-sm text-[#2D2A26] dark:text-[#E8E0D5] rounded-xl border border-dashed border-[#8FB39A]/50 bg-[#8FB39A]/5 px-2 py-1.5">
+            <input type="checkbox" checked={vaiEspelhar} onChange={e=>setVaiEspelhar(e.target.checked)} className="w-4 h-4 accent-[#8FB39A] mt-0.5" />
+            <span>
+              🏠 Também é despesa da {contaCasa.nome}
+              <span className="block text-[10px] text-[#8C857C] dark:text-[#9E9890]">
+                Aparece na {contaCasa.nome} sem contar duas vezes no total geral.
+              </span>
+            </span>
+          </label>
+        )}
         <div className="flex gap-2 items-center">
           <div className="relative flex-1">
             <span className="absolute left-3 top-1/2 -translate-y-1/2 text-[#8C857C] text-sm font-semibold">R$</span>
@@ -1213,6 +1302,22 @@ function ItemCard({ item, contas, currentUser, contaSelecionada, onRemover, onEd
             ) : item.recorrente ? (
               <span className="ml-1.5 text-[10px] text-[#8C857C] bg-[#8C857C]/10 rounded-full px-1.5 py-0.5" title="Marcado como recorrente (sem série)">🔄</span>
             ) : null}
+            {ehEspelho && (
+              <span
+                className="ml-1.5 text-[10px] text-[#8FB39A] bg-[#8FB39A]/15 rounded-full px-1.5 py-0.5"
+                title="Cópia de uma despesa paga na conta pessoal. Remover aqui não apaga o lançamento original."
+              >
+                🏠 espelho
+              </span>
+            )}
+            {estaEspelhado && !ehEspelho && (
+              <span
+                className="ml-1.5 text-[10px] text-[#8FB39A] bg-[#8FB39A]/15 rounded-full px-1.5 py-0.5"
+                title="Esta despesa também aparece na conta da casa"
+              >
+                🏠 {nomeContaEspelho ?? 'na casa'}
+              </span>
+            )}
           </p>
           <p className="text-[#8C857C] dark:text-[#9E9890] text-xs flex items-center gap-1 flex-wrap">
             <span>{item.categoria} · {fmtData(item.data)}</span>
