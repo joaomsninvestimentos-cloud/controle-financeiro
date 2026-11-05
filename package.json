@@ -10,7 +10,7 @@
     "dev": "next dev -p 13000",
     "build": "next build",
     "start": "next start -p 13000",
-    "test": "node --import tsx --test lib/request.test.ts lib/llm.test.ts lib/finbot-fallback.test.ts lib/recorrencia.test.ts lib/recorrencia-ddl.test.ts lib/auth-validation.test.ts lib/pwa-config.test.ts lib/contas-logic.test.ts lib/contas-ddl.test.ts lib/espelho-logic.test.ts lib/espelho-ddl.test.ts lib/pull-refresh-logic.test.ts lib/recorrencia-dup-logic.test.ts lib/movidos-logic.test.ts lib/espelho-doctor-logic.test.ts lib/mover-logic.test.ts",
+    "test": "node --import tsx --test lib/request.test.ts lib/llm.test.ts lib/finbot-fallback.test.ts lib/recorrencia.test.ts lib/recorrencia-ddl.test.ts lib/auth-validation.test.ts lib/pwa-config.test.ts lib/contas-logic.test.ts lib/contas-ddl.test.ts lib/espelho-logic.test.ts lib/espelho-ddl.test.ts lib/pull-refresh-logic.test.ts lib/recorrencia-dup-logic.test.ts lib/movidos-logic.test.ts lib/espelho-doctor-logic.test.ts lib/mover-logic.test.ts lib/saldo-casa.test.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",

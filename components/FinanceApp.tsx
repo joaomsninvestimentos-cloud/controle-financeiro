@@ -14,6 +14,7 @@ import ContasModal from './ContasModal'
 import RecorrenciasModal from './RecorrenciasModal'
 import ContaSwitcher from './ContaSwitcher'
 import EditarContaModal from './EditarContaModal'
+import { calcularSaldoCasa } from '@/lib/saldo-casa'
 import { normalizarRotuloSoma, resolverSelecao, ROTULO_SOMA } from '@/lib/contas-logic'
 import {
   CHAVE_MARCAS,
@@ -175,6 +176,8 @@ export function calcularSaldoConta(
   itensConta: Item[],
   mes: string
 ): { saldoInicio: number; receitas: number; despesas: number; saldoFim: number } {
+  if (conta.tipo === 'casa') return calcularSaldoCasa(itensConta, mes, parsearValor)
+
   const [yRef, mRef] = mes.split('-').map(Number)
   const saldoInicialMes = conta.saldoInicialMes || mes
   const [yIni, mIni] = saldoInicialMes.split('-').map(Number)
@@ -950,7 +953,7 @@ export default function ControleFinanceiro({ user }: { user: AuthUser }) {
                     <Users size={9} /> {conta.membros.filter(m => m.status === 'active').length + 1} pessoas
                   </span>
                 )}
-                <span className="text-xs text-[#8C857C] ml-auto">Evolução do mês</span>
+                <span className="text-xs text-[#8C857C] ml-auto">{conta.tipo === 'casa' ? 'Somente este mês' : 'Evolução do mês'}</span>
               </div>
               <div className="grid grid-cols-3 gap-2 text-center text-xs">
                 <div className="bg-[#FAF6F1] dark:bg-[#3E3935] rounded-xl p-2">
