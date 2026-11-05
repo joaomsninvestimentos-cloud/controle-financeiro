@@ -94,7 +94,8 @@ test('montarEspelho copia os dados e aponta para o original', () => {
   assert.equal(espelho.userId, base.userId)
   assert.equal(espelho.valor, base.valor)
   assert.equal(espelho.data, base.data)
-  assert.equal(espelho.recorrenciaId, 'serie-1')
+  // não herda a série: (recorrencia_id, mes) é único e o mês é o mesmo
+  assert.equal(espelho.recorrenciaId, null)
   assert.equal(espelho.recorrente, true)
 })
 

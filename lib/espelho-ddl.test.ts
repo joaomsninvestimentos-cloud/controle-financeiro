@@ -7,6 +7,7 @@ import test from 'node:test'
 
 import { PGlite } from '@electric-sql/pglite'
 import { DDL_ESPELHO } from './espelho-ddl'
+import { DDL_RECORRENCIA } from './recorrencia-ddl'
 import { montarEspelho, somarSemEspelhos, type ItemEspelhavel } from './espelho-logic'
 
 const BASE = `
@@ -58,6 +59,16 @@ async function novoBanco() {
   return db
 }
 
+/** Banco com o schema REAL de recorrência (inclui o índice único). */
+async function novoBancoComSerie() {
+  const db = await novoBanco()
+  for (const instrucao of DDL_RECORRENCIA) await db.exec(instrucao)
+  await db.exec(`CREATE TABLE IF NOT EXISTS orcamentos (
+    id text PRIMARY KEY, user_id text, conta_id text, mes text, categoria text, limite text
+  )`)
+  return db
+}
+
 test('DDL do espelho é idempotente e cria as colunas', async () => {
   const db = await novoBanco()
   for (const instrucao of DDL_ESPELHO) await db.exec(instrucao) // segunda vez
@@ -74,6 +85,51 @@ test('DDL do espelho é idempotente e cria as colunas', async () => {
     'SELECT indexname FROM pg_indexes WHERE indexname = \'items_espelho_de_idx\'',
   )
   assert.equal(indices.rows.length, 1)
+})
+
+test('BUG: espelho herdando recorrencia_id viola o índice único (recorrencia_id, mes)', async () => {
+  const db = await novoBancoComSerie()
+
+  await db.exec(`
+    INSERT INTO recorrencias (id, user_id, conta_id, descricao, valor, tipo, categoria, dia, mes_inicio)
+    VALUES ('serie-1','u1','pessoal-joao','Predialnet','99.90','despesa','Moradia','5','2026-11');
+    INSERT INTO items (id, user_id, conta_id, descricao, valor, tipo, categoria, data, mes, recorrente, recorrencia_id)
+    VALUES ('origem-nov','u1','pessoal-joao','Predialnet','99.90','despesa','Moradia','2026-11-05','2026-11',true,'serie-1');
+  `)
+
+  // Como era antes: o espelho copiava a série e caía no mesmo (recorrencia_id, mes)
+  const espelhoAntigo = montarEspelho({
+    id: 'origem-nov', userId: 'u1', contaId: 'pessoal-joao',
+    descricao: 'Predialnet', valor: '99.90', tipo: 'despesa', categoria: 'Moradia',
+    data: '2026-11-05', mes: '2026-11', recorrente: true, recorrenciaId: 'serie-1',
+  }, 'casa', 'espelho-nov')
+
+  await assert.rejects(
+    db.query(
+      `INSERT INTO items (id, user_id, conta_id, descricao, valor, tipo, categoria, data, mes, recorrente, recorrencia_id, espelho_de)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+      [espelhoAntigo.id, espelhoAntigo.userId, espelhoAntigo.contaId, espelhoAntigo.descricao,
+       espelhoAntigo.valor, espelhoAntigo.tipo, espelhoAntigo.categoria, espelhoAntigo.data,
+       espelhoAntigo.mes, espelhoAntigo.recorrente, 'serie-1', 'origem-nov'],
+    ),
+    'herdar a série precisa falhar no índice único',
+  )
+
+  // Como é agora: o espelho não herda a série e entra normalmente
+  assert.equal(espelhoAntigo.recorrenciaId, null)
+
+  await db.query(
+    `INSERT INTO items (id, user_id, conta_id, descricao, valor, tipo, categoria, data, mes, recorrente, recorrencia_id, espelho_de)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+    [espelhoAntigo.id, espelhoAntigo.userId, espelhoAntigo.contaId, espelhoAntigo.descricao,
+     espelhoAntigo.valor, espelhoAntigo.tipo, espelhoAntigo.categoria, espelhoAntigo.data,
+     espelhoAntigo.mes, espelhoAntigo.recorrente, espelhoAntigo.recorrenciaId, 'origem-nov'],
+  )
+
+  const linhas = await db.query<{ total: number }>(
+    'SELECT count(*)::int AS total FROM items WHERE espelho_de = \'origem-nov\'',
+  )
+  assert.equal(linhas.rows[0].total, 1)
 })
 
 test('espelho é uma linha separada que aponta para o original', async () => {

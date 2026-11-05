@@ -95,7 +95,8 @@ export async function criarEspelhoDoItem(item: ItemRow, contaDestinoId: string):
       data: dados.data,
       mes: dados.mes,
       recorrente: dados.recorrente,
-      recorrenciaId: dados.recorrenciaId ?? null,
+      // nunca herda a série: ver comentário em montarEspelho (índice único)
+      recorrenciaId: null,
       espelhoDe: item.id,
     })
     .returning()

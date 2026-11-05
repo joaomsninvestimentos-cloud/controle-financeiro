@@ -127,7 +127,11 @@ export function montarEspelho(
     data: origem.data,
     mes: origem.mes,
     recorrente: origem.recorrente,
-    recorrenciaId: origem.recorrenciaId ?? null,
+    // O espelho NÃO herda `recorrenciaId`: `items_recorrencia_mes_uidx` é
+    // único em (recorrencia_id, mes) e o espelho tem o mesmo mês do original.
+    // Herdar a série fazia o insert violar o índice e a cópia nunca nascia —
+    // era o "marco como da casa e nada acontece".
+    recorrenciaId: null,
     espelhoDe: origem.id,
   }
 }

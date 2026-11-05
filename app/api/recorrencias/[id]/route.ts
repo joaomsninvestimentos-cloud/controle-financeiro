@@ -1,11 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getAuthContext } from '@/lib/auth'
 import { encerrarRecorrencia, pularMes } from '@/lib/recorrencia-db'
+import { definirEspelhoDaSerie, ensureEspelhoSchema } from '@/lib/espelho-db'
 import { z } from 'zod'
 
 const bodySchema = z.object({
-  acao: z.enum(['encerrar', 'pular']).default('encerrar'),
+  acao: z.enum(['encerrar', 'pular', 'espelhar', 'nao-espelhar']).default('encerrar'),
   mes: z.string().regex(/^\d{4}-\d{2}$/),
+  /** Conta da casa (obrigatória quando acao = 'espelhar'). */
+  contaCasaId: z.string().min(1).optional(),
 })
 
 /**
@@ -25,7 +28,28 @@ export async function PATCH(
   const parsed = bodySchema.safeParse(body)
   if (!parsed.success) return NextResponse.json({ error: 'INVALID_INPUT' }, { status: 400 })
 
-  const { acao, mes } = parsed.data
+  const { acao, mes, contaCasaId } = parsed.data
+
+  // Espelhar (ou parar de espelhar) a série na conta da casa.
+  if (acao === 'espelhar' || acao === 'nao-espelhar') {
+    if (acao === 'espelhar' && !contaCasaId) {
+      return NextResponse.json({
+        error: 'SEM_CONTA_CASA',
+        message: 'Escolha a conta da casa.',
+      }, { status: 400 })
+    }
+    await ensureEspelhoSchema()
+    try {
+      const criados = await definirEspelhoDaSerie(id, acao === 'espelhar' ? contaCasaId! : null)
+      return NextResponse.json({ ok: true, acao, espelhados: criados })
+    } catch (err) {
+      console.error('espelhar série falhou', err)
+      return NextResponse.json({
+        error: 'ESPELHO_FALHOU',
+        message: 'Não foi possível espelhar na conta da casa. Tente de novo.',
+      }, { status: 500 })
+    }
+  }
 
   if (acao === 'pular') {
     const resultado = await pularMes(ctx.user.id, id, mes)
