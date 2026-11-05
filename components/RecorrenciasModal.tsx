@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
-import { X, RefreshCw, Loader2, CalendarOff, Ban, Repeat, Copy, Merge, Stethoscope, Wrench } from 'lucide-react'
+import { X, RefreshCw, Loader2, CalendarOff, Ban, Repeat, Copy, Merge, Stethoscope, Wrench, Home } from 'lucide-react'
 import { fmt, fmtMes, parsearValor, type Conta } from './FinanceApp'
 
 interface Recorrencia {
@@ -14,6 +14,7 @@ interface Recorrencia {
   mesInicio: string
   mesFim: string | null
   contaId: string | null
+  espelharContaId: string | null
   proximaData: string
   ocorrencias: number
 }
@@ -116,6 +117,42 @@ export default function RecorrenciasModal({ mesSelecionado, contas, onClose, onC
       onAviso('Sem conexão. Verifique sua internet.')
     } finally {
       setConsertando(false)
+    }
+  }
+
+  const contaCasa = contas.find(c => c.tipo === 'casa') ?? null
+
+  const alternarEspelho = async (serie: Recorrencia) => {
+    if (!contaCasa) {
+      onAviso('Você ainda não participa de uma conta da casa.')
+      return
+    }
+    const vaiEspelhar = !serie.espelharContaId
+    setAcaoId(serie.id)
+    try {
+      const res = await fetch(`/api/recorrencias/${serie.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          acao: vaiEspelhar ? 'espelhar' : 'nao-espelhar',
+          mes: mesSelecionado,
+          ...(vaiEspelhar ? { contaCasaId: contaCasa.id } : {}),
+        }),
+      })
+      const dados = await res.json().catch(() => ({})) as { message?: string; espelhados?: number }
+      if (!res.ok) {
+        onAviso(dados.message ?? 'Não foi possível espelhar.')
+        return
+      }
+      onAviso(vaiEspelhar
+        ? `"${serie.descricao}" agora aparece na ${contaCasa.nome} (${dados.espelhados ?? 0} mês(es)).`
+        : `"${serie.descricao}" não é mais espelhada na ${contaCasa.nome}.`)
+      carregar()
+      onChanged()
+    } catch {
+      onAviso('Sem conexão. Verifique sua internet.')
+    } finally {
+      setAcaoId(null)
     }
   }
 
@@ -238,7 +275,27 @@ export default function RecorrenciasModal({ mesSelecionado, contas, onClose, onC
                 </span>
               </div>
 
+              {s.espelharContaId && (
+                <p className="text-[10px] font-semibold text-[#5f8a6d] dark:text-[#8FB39A] flex items-center gap-1">
+                  <Home size={10} /> espelhada na {contas.find(c => c.id === s.espelharContaId)?.nome ?? 'casa'}
+                </p>
+              )}
+
               <div className="flex gap-2 flex-wrap pt-1">
+                {contaCasa && (
+                  <button
+                    onClick={() => alternarEspelho(s)}
+                    disabled={ocupado}
+                    className={`inline-flex items-center gap-1 text-[11px] font-semibold rounded-full px-2.5 py-1.5 border active:scale-95 disabled:opacity-50 ${
+                      s.espelharContaId
+                        ? 'text-[#8C857C] dark:text-[#9E9890] bg-white dark:bg-[#2B2825] border-[rgba(45,42,38,0.10)] dark:border-[rgba(255,255,255,0.07)]'
+                        : 'text-white bg-[#8FB39A] border-transparent'
+                    }`}
+                  >
+                    {ocupado ? <Loader2 size={11} className="animate-spin" /> : <Home size={11} />}
+                    {s.espelharContaId ? 'Parar de espelhar' : `Também é da ${contaCasa.nome}`}
+                  </button>
+                )}
                 <button
                   onClick={() => acao(s.id, 'pular', s.descricao)}
                   disabled={ocupado}

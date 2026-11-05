@@ -446,6 +446,8 @@ export interface RecorrenciaResumo {
   mesInicio: string
   mesFim: string | null
   contaId: string | null
+  /** Conta da casa onde esta série é espelhada (null = não espelha). */
+  espelharContaId: string | null
   proximaData: string
   ocorrencias: number
 }
@@ -493,6 +495,7 @@ export async function listarRecorrencias(userId: string): Promise<RecorrenciaRes
       mesInicio: s.mesInicio,
       mesFim: s.mesFim,
       contaId: s.contaId,
+      espelharContaId: s.espelharContaId ?? null,
       proximaData: dataDaOcorrencia(referencia, dia),
       ocorrencias: totalPorSerie.get(s.id) ?? 0,
     }

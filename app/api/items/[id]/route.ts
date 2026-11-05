@@ -116,11 +116,39 @@ export async function PATCH(
       data: parsed.data.data ?? atual.data,
     })
     await db.delete(items).where(eq(items.id, id))
+
+    // Se o usuário marcou "também é da casa" nesta mesma edição, o espelho
+    // precisa nascer junto — antes este caminho devolvia cedo e descartava a
+    // marca (o "marco e nada acontece" em lançamentos recorrentes antigos).
+    if (parsed.data.espelharNaContaId) {
+      const destino = parsed.data.espelharNaContaId
+      const ok = await casaAcessivel(ctx.user.id, destino)
+      if (!ok) {
+        return NextResponse.json({
+          error: 'ESPELHO_DESTINO_INVALIDO',
+          message: 'Essa conta não é uma conta da casa que você participa.',
+        }, { status: 400 })
+      }
+      try {
+        await definirEspelhoDaSerie(criada.recorrencia.id, destino)
+      } catch (err) {
+        console.error('espelho ao criar série falhou', err)
+        return NextResponse.json({
+          error: 'ESPELHO_FALHOU',
+          message: 'A despesa fixa foi criada, mas o espelho na casa falhou. Abra a aba Fixas e toque em "Também é da casa".',
+        }, { status: 500 })
+      }
+    }
+
     const itemSerie = criada.primeiroItem
       ? await db.select().from(items).where(eq(items.id, criada.primeiroItem.id))
       : []
+    const espelhos = criada.primeiroItem ? await mapaEspelhos([criada.primeiroItem.id]) : new Map()
+    const primeiro = itemSerie[0] ?? criada.primeiroItem
     return NextResponse.json({
-      item: itemSerie[0] ?? criada.primeiroItem,
+      item: primeiro
+        ? { ...primeiro, espelhadoNaContaId: espelhos.get(primeiro.id) ?? null }
+        : primeiro,
       recorrencia: criada.recorrencia,
       geradas: criada.geradas,
     })
